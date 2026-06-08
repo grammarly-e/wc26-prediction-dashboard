@@ -163,7 +163,13 @@ export async function getStageLeaderboards(): Promise<{
     return row;
   }
 
-  for (const pred of predictionsRes.data as Array<{
+  // Supabase's untyped client infers embedded-resource selects (`matches(round)`)
+  // as an array (`{ round }[]`) because it can't read the FK cardinality off
+  // generated schema types. At runtime, match_predictions.match_id -> matches.id
+  // is many-to-one, so postgrest actually returns a single object (or null) here
+  // — hence the indirection through `unknown` rather than a direct `as`, which
+  // TS correctly refuses (array and object shapes aren't comparable).
+  for (const pred of predictionsRes.data as unknown as Array<{
     participant_id: string;
     points_awarded: number | null;
     matches: { round: Match["round"] } | null;
