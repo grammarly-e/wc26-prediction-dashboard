@@ -14,6 +14,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
 import StatusBadge from "./StatusBadge";
 import type { Match, MatchPrediction } from "@/lib/types";
@@ -69,6 +70,8 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
   const team1 = match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code;
   const team2 = match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code;
   const isPlaceholder = !match.team1_id || !match.team2_id;
+  const flag1 = flagForTeam(team1);
+  const flag2 = flagForTeam(team2);
   const locked = new Date(match.kickoff_at).getTime() <= Date.now();
 
   const countdown = locked ? null : formatCountdown(match.kickoff_at);
@@ -124,11 +127,15 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
       </div>
 
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className={`flex-1 text-right font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>
+        <span className={`flex flex-1 items-center justify-end gap-2 text-right font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>
           {team1}
+          {flag1 && <span aria-hidden="true">{flag1}</span>}
         </span>
         <span className="text-xs text-neutral-400">vs</span>
-        <span className={`flex-1 font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>{team2}</span>
+        <span className={`flex flex-1 items-center gap-2 font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>
+          {flag2 && <span aria-hidden="true">{flag2}</span>}
+          {team2}
+        </span>
       </div>
 
       <p className="flex items-center gap-2 text-xs text-neutral-500">

@@ -15,6 +15,7 @@
 import { createServerSupabaseClient } from "./supabase/server";
 import type {
   LeaderboardRow,
+  Match,
   MatchPrediction,
   Participant,
   PredictionCategory,
@@ -90,4 +91,124 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
     .order("rank", { ascending: true });
   if (error) throw error;
   return data as LeaderboardRow[];
+}
+
+// ============================================================================
+// Stage-split leaderboard
+//
+// The `leaderboard` view sums match points across the whole tournament — but
+// the group stage (Matchdays 1–17, matches #1–72) and the knockout rounds
+// (Round of 32 through the Final, #73–104) are different games of skill: one
+// rewards reading 12 separate group dynamics, the other rewards calling
+// single-elimination upsets. Splitting them surfaces a "group stage champion"
+// and a "knockout stage champion" alongside the overall leaderboard.
+//
+// There's no view for this in the schema, so it's computed here by reading
+// scored predictions (points_awarded is only ever set once a match has
+// finished — i.e. after kickoff, which is exactly when RLS opens up everyone's
+// picks for that match — so this aggregate is always complete, never partial).
+// ============================================================================
+
+export interface StageLeaderboardRow {
+  participant_id: string;
+  display_name: string;
+  group_stage_points: number;
+  group_stage_matches_scored: number;
+  knockout_points: number;
+  knockout_matches_scored: number;
+}
+
+function isKnockoutRound(round: Match["round"]): boolean {
+  return round !== "Group Stage";
+}
+
+/**
+ * Per-participant match points, split into group-stage vs. knockout-stage
+ * totals, each sorted descending (so index 0 is that stage's leader).
+ */
+export async function getStageLeaderboards(): Promise<{
+  groupStage: StageLeaderboardRow[];
+  knockout: StageLeaderboardRow[];
+}> {
+  const supabase = createServerSupabaseClient();
+
+  const [predictionsRes, participantsRes] = await Promise.all([
+    supabase
+      .from("match_predictions")
+      .select("participant_id, points_awarded, matches(round)")
+      .not("points_awarded", "is", null),
+    supabase.from("participants").select("id, display_name"),
+  ]);
+  if (predictionsRes.error) throw predictionsRes.error;
+  if (participantsRes.error) throw participantsRes.error;
+
+  const nameById = new Map(
+    (participantsRes.data as Array<{ id: string; display_name: string }>).map((p) => [p.id, p.display_name])
+  );
+
+  const totals = new Map<string, StageLeaderboardRow>();
+  function rowFor(participantId: string): StageLeaderboardRow {
+    let row = totals.get(participantId);
+    if (!row) {
+      row = {
+        participant_id: participantId,
+        display_name: nameById.get(participantId) ?? "Unknown",
+        group_stage_points: 0,
+        group_stage_matches_scored: 0,
+        knockout_points: 0,
+        knockout_matches_scored: 0,
+      };
+      totals.set(participantId, row);
+    }
+    return row;
+  }
+
+  for (const pred of predictionsRes.data as Array<{
+    participant_id: string;
+    points_awarded: number | null;
+    matches: { round: Match["round"] } | null;
+  }>) {
+    if (pred.points_awarded === null || !pred.matches) continue;
+    const row = rowFor(pred.participant_id);
+    if (isKnockoutRound(pred.matches.round)) {
+      row.knockout_points += pred.points_awarded;
+      row.knockout_matches_scored += 1;
+    } else {
+      row.group_stage_points += pred.points_awarded;
+      row.group_stage_matches_scored += 1;
+    }
+  }
+
+  const all = Array.from(totals.values());
+  return {
+    groupStage: [...all].sort((a, b) => b.group_stage_points - a.group_stage_points),
+    knockout: [...all].sort((a, b) => b.knockout_points - a.knockout_points),
+  };
+}
+
+// ============================================================================
+// "Compare picks" — every match prediction the current viewer is allowed to
+// see, grouped by the participant who made it.
+//
+// RLS (supabase/migrations/0002_*) does the filtering for us: this returns
+// the viewer's own picks regardless of timing, plus everyone else's picks
+// only for matches that have already kicked off. That's exactly the right
+// shape for a "click a name to see their breakdown" feature — nobody can
+// preview a pick before the match locks, but once it has, comparisons are
+// fair game.
+// ============================================================================
+
+/** Every visible match prediction, grouped by participant_id. */
+export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<string, MatchPrediction[]>> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase.from("match_predictions").select("*");
+  if (error) throw error;
+
+  const byParticipant = new Map<string, MatchPrediction[]>();
+  for (const row of data as MatchPrediction[]) {
+    const list = byParticipant.get(row.participant_id) ?? [];
+    list.push(row);
+    byParticipant.set(row.participant_id, list);
+  }
+  return byParticipant;
 }

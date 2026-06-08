@@ -1,7 +1,14 @@
 import Link from "next/link";
 
-import { getLastSyncedAt } from "@/lib/data";
-import { getCurrentParticipant, getLeaderboard } from "@/lib/predictions";
+import { getLastSyncedAt, getMatches, getTeamNameMap } from "@/lib/data";
+import {
+  getCurrentParticipant,
+  getLeaderboard,
+  getStageLeaderboards,
+  getVisibleMatchPredictionsByParticipant,
+  type StageLeaderboardRow,
+} from "@/lib/predictions";
+import LeaderboardTable, { type LeaderboardTableRow } from "@/components/LeaderboardTable";
 
 export const revalidate = 0;
 
@@ -17,13 +24,76 @@ function formatSyncedAt(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function StageLeaderCard({
+  label,
+  description,
+  leader,
+  points,
+  matchesScored,
+}: {
+  label: string;
+  description: string;
+  leader: StageLeaderboardRow | null;
+  points: number;
+  matchesScored: number;
+}) {
+  return (
+    <div className="card flex flex-col gap-1 p-4">
+      <p className="text-xs uppercase tracking-wide text-neutral-400">{label}</p>
+      {leader && matchesScored > 0 ? (
+        <>
+          <p className="text-lg font-bold">
+            🏆 {leader.display_name} <span className="font-mono font-normal text-neutral-500">· {points} pts</span>
+          </p>
+          <p className="text-xs text-neutral-500">{description}</p>
+        </>
+      ) : (
+        <>
+          <p className="text-lg font-bold text-neutral-400">Not underway yet</p>
+          <p className="text-xs text-neutral-500">{description}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced] = await Promise.all([
+  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames] = await Promise.all([
     getLeaderboard(),
     getCurrentParticipant(),
     getLastSyncedAt(),
+    getStageLeaderboards(),
+    getVisibleMatchPredictionsByParticipant(),
+    getMatches(),
+    getTeamNameMap(),
   ]);
   const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
+
+  const matchById = new Map(matches.map((m) => [m.id, m]));
+  const stageById = new Map<string, StageLeaderboardRow>();
+  for (const r of [...stageLeaderboards.groupStage, ...stageLeaderboards.knockout]) {
+    stageById.set(r.participant_id, r);
+  }
+
+  const tableRows: LeaderboardTableRow[] = rows.map((row) => {
+    const stage = stageById.get(row.participant_id);
+    return {
+      participant_id: row.participant_id,
+      display_name: row.display_name,
+      rank: row.rank,
+      total_points: row.total_points,
+      match_points: row.match_points,
+      tournament_points: row.tournament_points,
+      exact_score_hits: row.exact_score_hits,
+      group_stage_points: stage?.group_stage_points ?? 0,
+      knockout_points: stage?.knockout_points ?? 0,
+    };
+  });
+
+  const groupLeader = stageLeaderboards.groupStage[0] ?? null;
+  const knockoutLeader = stageLeaderboards.knockout[0] ?? null;
+  const groupMatchesScored = stageLeaderboards.groupStage.reduce((sum, r) => sum + r.group_stage_matches_scored, 0);
+  const knockoutMatchesScored = stageLeaderboards.knockout.reduce((sum, r) => sum + r.knockout_matches_scored, 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -32,12 +102,30 @@ export default async function LeaderboardPage() {
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
             Ranked by total points (match picks + tournament award picks), with exact-scoreline calls as the
-            tiebreaker. Updates automatically as results come in.
+            tiebreaker. Click a participant to see their match-by-match breakdown — picks for matches that haven&rsquo;t
+            kicked off yet stay hidden for everyone. Updates automatically as results come in.
           </p>
         </div>
         <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
           Live data synced {formatSyncedAt(lastSynced)}
         </span>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <StageLeaderCard
+          label="Group stage leader"
+          description="Most match-prediction points across Matchdays 1–17 (matches #1–72)."
+          leader={groupLeader}
+          points={groupLeader?.group_stage_points ?? 0}
+          matchesScored={groupMatchesScored}
+        />
+        <StageLeaderCard
+          label="Knockout stage leader"
+          description="Most match-prediction points from the Round of 32 through the Final (matches #73–104)."
+          leader={knockoutLeader}
+          points={knockoutLeader?.knockout_points ?? 0}
+          matchesScored={knockoutMatchesScored}
+        />
       </div>
 
       {myRow && (
@@ -77,49 +165,13 @@ export default async function LeaderboardPage() {
           .
         </div>
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
-                <th className="px-4 py-3 font-semibold">Rank</th>
-                <th className="px-4 py-3 font-semibold">Participant</th>
-                <th className="px-4 py-3 text-right font-semibold">Total</th>
-                <th className="px-4 py-3 text-right font-semibold">Match pts</th>
-                <th className="px-4 py-3 text-right font-semibold">Award pts</th>
-                <th className="px-4 py-3 text-right font-semibold">Exact calls</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const isMe = participant?.id === row.participant_id;
-                return (
-                  <tr
-                    key={row.participant_id}
-                    className={`border-b border-neutral-100 last:border-0 ${isMe ? "bg-gold/10" : ""}`}
-                  >
-                    <td className="px-4 py-3 font-mono text-neutral-500">
-                      {MEDALS[row.rank] ?? row.rank}
-                    </td>
-                    <td className="px-4 py-3 font-medium">
-                      {row.display_name}
-                      {isMe && <span className="badge ml-2 bg-pitch text-gold">You</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{row.total_points}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">
-                      {row.match_points}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">
-                      {row.tournament_points}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">
-                      {row.exact_score_hits}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <LeaderboardTable
+          rows={tableRows}
+          currentParticipantId={participant?.id ?? null}
+          breakdowns={breakdowns}
+          matches={matchById}
+          teamNames={teamNames}
+        />
       )}
     </div>
   );

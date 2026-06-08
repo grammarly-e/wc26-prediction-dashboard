@@ -81,24 +81,80 @@ export interface GroupStanding extends Standing {
   team_name: string;
 }
 
-/** Group standings (A–L), each table sorted by rank. */
+/**
+ * A zero-value standings row for a team that hasn't played yet — same shape
+ * as a real `standings` row (minus a stable `id`/`updated_at`, which the
+ * sync job assigns once it materializes the row from results).
+ */
+function blankStanding(team: Pick<Team, "id" | "name" | "group_letter">): GroupStanding {
+  return {
+    id: `pending-${team.id}`,
+    group_letter: team.group_letter ?? "",
+    team_id: team.id,
+    played: 0,
+    won: 0,
+    drawn: 0,
+    lost: 0,
+    goals_for: 0,
+    goals_against: 0,
+    goal_diff: 0,
+    points: 0,
+    rank: null,
+    updated_at: "",
+    team_name: team.name,
+  };
+}
+
+/**
+ * Group standings (A–L), each table sorted by rank.
+ *
+ * Groups whose matches haven't kicked off yet have no rows in `standings`
+ * (the sync job only materializes a group's table once results start coming
+ * in) — for those, we backfill all four rostered teams as zero-value rows
+ * (sorted alphabetically) so the page always shows a complete table instead
+ * of an empty state.
+ */
 export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]>> {
   const supabase = createServerSupabaseClient();
-  const { data, error } = await supabase
-    .from("standings")
-    .select("*, teams(name)")
-    .order("group_letter", { ascending: true })
-    .order("rank", { ascending: true, nullsFirst: false });
-  if (error) throw error;
+
+  const [standingsRes, teamsRes] = await Promise.all([
+    supabase
+      .from("standings")
+      .select("*, teams(name)")
+      .order("group_letter", { ascending: true })
+      .order("rank", { ascending: true, nullsFirst: false }),
+    supabase
+      .from("teams")
+      .select("id, name, group_letter")
+      .not("group_letter", "is", null)
+      .order("name", { ascending: true }),
+  ]);
+  if (standingsRes.error) throw standingsRes.error;
+  if (teamsRes.error) throw teamsRes.error;
 
   const byGroup = new Map<string, GroupStanding[]>();
-  for (const row of data as Array<Standing & { teams: { name: string } | null }>) {
+  for (const row of standingsRes.data as Array<Standing & { teams: { name: string } | null }>) {
     const { teams, ...rest } = row;
     const entry: GroupStanding = { ...rest, team_name: teams?.name ?? "Unknown" };
     const list = byGroup.get(entry.group_letter) ?? [];
     list.push(entry);
     byGroup.set(entry.group_letter, list);
   }
+
+  // Backfill: any group with no materialized standings yet gets a full
+  // four-team table of zero rows, built straight from the team roster.
+  // (Snapshot which groups are already materialized *before* adding blanks —
+  // otherwise the first backfilled team would mark its group as "already has
+  // rows" and the other three teams would be skipped.)
+  const materializedGroups = new Set(byGroup.keys());
+  for (const team of teamsRes.data as Array<Pick<Team, "id" | "name" | "group_letter">>) {
+    const letter = team.group_letter;
+    if (!letter || materializedGroups.has(letter)) continue;
+    const list = byGroup.get(letter) ?? [];
+    list.push(blankStanding(team));
+    byGroup.set(letter, list);
+  }
+
   return byGroup;
 }
 
