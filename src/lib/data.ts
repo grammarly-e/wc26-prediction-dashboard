@@ -23,6 +23,14 @@ export async function getTeamNameMap(): Promise<Map<string, string>> {
   return new Map((data as Pick<Team, "id" | "name">[]).map((t) => [t.id, t.name]));
 }
 
+/** All teams, alphabetical — backs the team picker on the tournament-award prediction page. */
+export async function getTeams(): Promise<Team[]> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase.from("teams").select("*").order("name", { ascending: true });
+  if (error) throw error;
+  return data as Team[];
+}
+
 /** All 104 matches, ordered for schedule display (kickoff order). */
 export async function getMatches(): Promise<Match[]> {
   const supabase = createServerSupabaseClient();

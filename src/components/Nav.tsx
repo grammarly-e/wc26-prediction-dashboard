@@ -5,6 +5,8 @@ const LINKS = [
   { href: "/matches", label: "Matches" },
   { href: "/standings", label: "Standings" },
   { href: "/scorers", label: "Top Scorers" },
+  { href: "/predictions", label: "Predictions" },
+  { href: "/leaderboard", label: "Leaderboard" },
 ];
 
 export default function Nav() {

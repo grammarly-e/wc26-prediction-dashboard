@@ -23,6 +23,8 @@ In the Supabase SQL Editor, run these three files in order (open each, paste the
 2. `supabase/migrations/0002_row_level_security.sql`
 3. `supabase/seed/prediction_categories.sql`
 
+Then turn on anonymous sign-in, which is how participants join with just a display name (no email or password): in the Supabase dashboard, go to **Authentication > Sign In / Providers**, find **Anonymous Sign-Ins**, and switch it on. Skip this and the "Join" button on `/predictions` will fail with "Anonymous sign-ins are disabled."
+
 Then load the match schedule:
 
 ```bash
@@ -66,5 +68,4 @@ A response like `{"ok":true,...}` means everything is wired up correctly.
 
 ## Known gaps (not bugs — just not built yet)
 
-- **Player stats**: the free data plan doesn't reliably provide World Cup player rosters, which may affect categories like Golden Boot. Revisit once the tournament starts; a second data source can be added later if needed.
-- **Prediction submission and leaderboard pages**: intentionally not built yet — these are the next phase.
+- **Player stats**: the free data plan doesn't reliably provide World Cup player rosters, which may affect categories like Golden Boot and the player-pick categories on `/predictions/categories`. That's why those use free-text name entry instead of a dropdown — `scoreTournamentPrediction()` falls back to a case-insensitive name match. Revisit once the tournament starts; a second data source can be added later if needed.
