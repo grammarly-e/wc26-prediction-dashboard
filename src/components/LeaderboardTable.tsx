@@ -47,6 +47,36 @@ function tierBadgeClass(points: number): string {
   return "bg-neutral-100 text-neutral-400";
 }
 
+// ----------------------------------------------------------------------------
+// Right/wrong/exact color coding for the breakdown cards — gold for an exact
+// scoreline, green for a correct W/D/L call (even if the scoreline was off),
+// red for a wrong call (including the small "close call" bonus, since the
+// outcome itself was still a miss), neutral for picks not yet scored (the
+// match hasn't finished, so score_breakdown/points_awarded are still null).
+// ----------------------------------------------------------------------------
+type PickResult = "exact" | "correct" | "wrong" | "pending";
+
+function pickResult(pick: MatchPrediction): PickResult {
+  if (pick.points_awarded === null || !pick.score_breakdown) return "pending";
+  if (pick.score_breakdown.exact_score) return "exact";
+  if (pick.score_breakdown.correct_outcome) return "correct";
+  return "wrong";
+}
+
+const PICK_RESULT_CLASSES: Record<PickResult, string> = {
+  exact: "border-gold/50 bg-gold/10",
+  correct: "border-emerald-300 bg-emerald-50",
+  wrong: "border-red-200 bg-red-50",
+  pending: "border-neutral-200 bg-white",
+};
+
+const PICK_RESULT_LABELS: Record<PickResult, string> = {
+  exact: "Exact scoreline",
+  correct: "Right result",
+  wrong: "Wrong call",
+  pending: "Awaiting kickoff",
+};
+
 export default function LeaderboardTable({ rows, currentParticipantId, breakdowns, matches, teamNames }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -146,9 +176,25 @@ function PredictionBreakdown({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-xs text-neutral-500">
-        {displayName}&rsquo;s picks for matches that have kicked off so far ({visible.length} of {picks.length} total):
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="text-xs text-neutral-500">
+          {displayName}&rsquo;s picks for matches that have kicked off so far ({visible.length} of {picks.length} total):
+        </p>
+        <div className="flex items-center gap-3 text-[11px] text-neutral-500">
+          <span className="inline-flex items-center gap-1">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full border border-gold/50 bg-gold/30" />
+            Exact
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full border border-emerald-300 bg-emerald-200" />
+            Right result
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full border border-red-300 bg-red-200" />
+            Wrong
+          </span>
+        </div>
+      </div>
       <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
         {visible.map(({ pick, match }) => {
           const team1 = match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code;
@@ -156,8 +202,13 @@ function PredictionBreakdown({
           const flag1 = flagForTeam(team1);
           const flag2 = flagForTeam(team2);
           const hasResult = match.home_score !== null && match.away_score !== null;
+          const result = pickResult(pick);
           return (
-            <div key={pick.id} className="card flex items-center justify-between gap-2 px-3 py-2 text-xs">
+            <div
+              key={pick.id}
+              title={PICK_RESULT_LABELS[result]}
+              className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs shadow-sm ${PICK_RESULT_CLASSES[result]}`}
+            >
               <div className="flex min-w-0 flex-col gap-0.5">
                 <span className="truncate text-neutral-500">
                   #{match.match_number} · {match.round}

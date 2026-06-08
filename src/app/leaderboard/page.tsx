@@ -24,6 +24,30 @@ function formatSyncedAt(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+// ----------------------------------------------------------------------------
+// Award-pick accuracy — "who called the Champion / Golden Boot best?"
+//
+// Deliberately a placeholder for now: tournament_predictions.points_awarded
+// is never written (scoreTournamentPrediction exists in scoring.ts but no
+// resolution job calls it), and these categories genuinely can't resolve
+// until their real-world outcome is known — Champion only once the Final
+// final whistle blows, Golden Boot shortly after as scoring gets confirmed.
+// Building "live tracking" here would mean guessing at outcomes mid-tournament,
+// which is exactly the kind of fragile gimmick worth avoiding. Shipping the
+// section now (clearly marked pending) sets user expectations correctly and
+// means the real ranking can slot in here later with no layout change.
+// ----------------------------------------------------------------------------
+
+function AwardAccuracyCard({ label, description }: { label: string; description: string }) {
+  return (
+    <div className="card flex flex-col gap-1 p-4">
+      <p className="text-xs uppercase tracking-wide text-neutral-400">{label}</p>
+      <p className="text-lg font-bold text-neutral-400">Not decided yet</p>
+      <p className="text-xs text-neutral-500">{description}</p>
+    </div>
+  );
+}
+
 function StageLeaderCard({
   label,
   description,
@@ -95,6 +119,13 @@ export default async function LeaderboardPage() {
   const groupMatchesScored = stageLeaderboards.groupStage.reduce((sum, r) => sum + r.group_stage_matches_scored, 0);
   const knockoutMatchesScored = stageLeaderboards.knockout.reduce((sum, r) => sum + r.knockout_matches_scored, 0);
 
+  // Match #104 is the Final — its kickoff date is the natural "this resolves
+  // around..." anchor for the award-pick placeholder cards below.
+  const finalMatch = matches.find((m) => m.match_number === 104) ?? null;
+  const finalDateLabel = finalMatch
+    ? new Date(finalMatch.kickoff_at).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
+    : "the Final";
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -126,6 +157,24 @@ export default async function LeaderboardPage() {
           points={knockoutLeader?.knockout_points ?? 0}
           matchesScored={knockoutMatchesScored}
         />
+      </div>
+
+      <div>
+        <h2 className="mb-1 text-sm font-semibold text-neutral-700">Award pick accuracy</h2>
+        <p className="mb-3 text-xs text-neutral-500">
+          Who called the Champion and Golden Boot best? These can&rsquo;t be scored until the real outcomes are known —
+          rankings will appear here once they&rsquo;re decided.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <AwardAccuracyCard
+            label="Champion pick"
+            description={`Resolves once the Champion is crowned — expected after the Final on ${finalDateLabel}.`}
+          />
+          <AwardAccuracyCard
+            label="Golden Boot pick"
+            description={`Resolves once the tournament's top scorer is confirmed, shortly after the Final on ${finalDateLabel}.`}
+          />
+        </div>
       </div>
 
       {myRow && (

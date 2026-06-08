@@ -19,6 +19,7 @@ import type {
   MatchPrediction,
   Participant,
   PredictionCategory,
+  ScoreBreakdown,
   TournamentPrediction,
 } from "./types";
 
@@ -190,6 +191,62 @@ export async function getStageLeaderboards(): Promise<{
     groupStage: [...all].sort((a, b) => b.group_stage_points - a.group_stage_points),
     knockout: [...all].sort((a, b) => b.knockout_points - a.knockout_points),
   };
+}
+
+// ============================================================================
+// Match insights — "how did the crowd do on this one?"
+//
+// Same RLS-completeness trick as getStageLeaderboards: points_awarded (and
+// therefore score_breakdown) is only ever set once a match has finished, and
+// finished-match predictions are visible to everyone — so summing correct/
+// incorrect calls per match is always a complete picture, never a partial
+// peek at picks that haven't locked yet.
+//
+// The matches page uses this to call out the "Biggest Upset" (the finished
+// match where the crowd was most often wrong about the result) and "Best
+// Read" (the one most people called correctly) — a bit of fun texture on
+// what would otherwise be a plain schedule grid.
+// ============================================================================
+
+export interface MatchInsight {
+  match_id: string;
+  total_predictions: number;
+  correct_outcome_count: number;
+  exact_score_count: number;
+  /** Share of scored predictions that called the right W/D/L outcome, 0–1. */
+  correct_outcome_rate: number;
+}
+
+/** Per-match aggregate of how participants' scored predictions landed, keyed by match_id. */
+export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("match_predictions")
+    .select("match_id, score_breakdown")
+    .not("points_awarded", "is", null);
+  if (error) throw error;
+
+  const totals = new Map<string, { total: number; correct: number; exact: number }>();
+  for (const row of data as Array<{ match_id: string; score_breakdown: ScoreBreakdown | null }>) {
+    if (!row.score_breakdown) continue;
+    const t = totals.get(row.match_id) ?? { total: 0, correct: 0, exact: 0 };
+    t.total += 1;
+    if (row.score_breakdown.correct_outcome) t.correct += 1;
+    if (row.score_breakdown.exact_score) t.exact += 1;
+    totals.set(row.match_id, t);
+  }
+
+  const insights = new Map<string, MatchInsight>();
+  for (const [matchId, t] of totals) {
+    insights.set(matchId, {
+      match_id: matchId,
+      total_predictions: t.total,
+      correct_outcome_count: t.correct,
+      exact_score_count: t.exact,
+      correct_outcome_rate: t.total > 0 ? t.correct / t.total : 0,
+    });
+  }
+  return insights;
 }
 
 // ============================================================================
