@@ -74,6 +74,38 @@ export default async function PredictionsPage() {
         </Link>
       </div>
 
+      <details className="card group p-4 text-sm text-neutral-600 open:pb-4 [&:not([open])]:pb-3">
+        <summary className="cursor-pointer list-none font-semibold text-neutral-800 marker:hidden">
+          <span className="inline-flex items-center gap-2">
+            How scoring works
+            <span className="text-xs font-normal text-neutral-400 group-open:hidden">(click to expand)</span>
+          </span>
+        </summary>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <p className="flex items-center justify-between rounded-lg bg-gold/10 px-3 py-2">
+            <span>Exact scoreline</span>
+            <span className="font-mono font-bold text-pitch">25 pts</span>
+          </p>
+          <p className="flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2">
+            <span>Correct result + goal difference</span>
+            <span className="font-mono font-bold text-emerald-700">15 pts</span>
+          </p>
+          <p className="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
+            <span>Correct result only (W/D/L)</span>
+            <span className="font-mono font-bold text-sky-700">8 pts</span>
+          </p>
+          <p className="flex items-center justify-between rounded-lg bg-neutral-100 px-3 py-2">
+            <span>Close call (both scores within 1 goal, wrong result)</span>
+            <span className="font-mono font-bold text-neutral-600">3 pts</span>
+          </p>
+        </div>
+        <p className="mt-3 text-xs text-neutral-400">
+          Tiers don&rsquo;t stack — you get the single highest one you qualify for. Calling the exact scoreline
+          is worth more than three times a plain win/draw/loss guess, so it pays to commit to a real prediction
+          rather than hedging.
+        </p>
+      </details>
+
       {ROUND_ORDER.map((round) => {
         const roundMatches = grouped.get(round) ?? [];
         if (roundMatches.length === 0) return null;

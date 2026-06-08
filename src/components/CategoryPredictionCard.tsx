@@ -32,6 +32,22 @@ function formatLockTime(iso: string): string {
   });
 }
 
+/** Same relative-countdown treatment as MatchPredictionCard — these
+ * categories lock at very different points across the tournament (some
+ * before the opening match, some not until the semifinals), so "in 6 days"
+ * vs. "in 11 weeks" is genuinely useful at-a-glance context. */
+function formatCountdown(iso: string): string | null {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return null;
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `locks in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `locks in ${hours}h ${mins % 60}m`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `locks in ${days}d`;
+  return `locks in ${Math.round(days / 7)}w`;
+}
+
 interface Props {
   category: PredictionCategory;
   teams: Team[];
@@ -42,6 +58,7 @@ interface Props {
 
 export default function CategoryPredictionCard({ category, teams, participantId, existing, teamNames }: Props) {
   const locked = new Date(category.locks_at).getTime() <= Date.now();
+  const countdown = locked ? null : formatCountdown(category.locks_at);
   const isTeamPick = category.target_type === "team";
 
   // For group-winner categories, narrow the dropdown to that group's teams —
@@ -99,12 +116,21 @@ export default function CategoryPredictionCard({ category, teams, participantId,
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="font-semibold">{category.label}</h3>
-          <p className="text-xs text-neutral-500">
-            Worth {category.points_value} pts · locks {formatLockTime(category.locks_at)}
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-500">
+            <span>
+              Worth {category.points_value} pts · locks {formatLockTime(category.locks_at)}
+            </span>
+            {countdown && <span className="badge bg-pitch/10 text-pitch">{countdown}</span>}
           </p>
         </div>
         {existing?.points_awarded !== null && existing?.points_awarded !== undefined && (
-          <span className="badge shrink-0 bg-gold/20 text-pitch">+{existing.points_awarded} pts</span>
+          <span
+            className={`badge shrink-0 ${
+              existing.points_awarded > 0 ? "bg-gold/30 text-pitch" : "bg-neutral-100 text-neutral-400"
+            }`}
+          >
+            {existing.points_awarded > 0 ? `+${existing.points_awarded} pts` : "missed"}
+          </span>
         )}
       </div>
 

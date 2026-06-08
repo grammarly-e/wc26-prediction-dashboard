@@ -14,6 +14,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { SCORING } from "@/lib/scoring";
 import StatusBadge from "./StatusBadge";
 import type { Match, MatchPrediction } from "@/lib/types";
 
@@ -28,6 +29,35 @@ function formatKickoff(iso: string): string {
   });
 }
 
+/**
+ * "Locks in 2d 4h" / "Locks in 45m" — a relative countdown alongside the
+ * absolute kickoff time. Absolute time is what you'd actually plan around;
+ * relative time is what makes "I should do this soon" land emotionally.
+ * Computed at render time (no ticking interval) — close enough for a value
+ * that only matters down to the minute, and avoids re-render churn across
+ * 100+ cards on the page.
+ */
+function formatCountdown(iso: string): string | null {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return null;
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `locks in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `locks in ${hours}h ${mins % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `locks in ${days}d ${hours % 24}h`;
+}
+
+/** Colors the points badge by which scoring tier it landed in — lets you
+ * scan a long list of results and immediately see your hits vs. misses. */
+function tierBadgeClass(points: number): string {
+  if (points >= SCORING.EXACT_SCORE) return "bg-gold/30 text-pitch";
+  if (points >= SCORING.RESULT_AND_GOAL_DIFF) return "bg-emerald-100 text-emerald-700";
+  if (points >= SCORING.RESULT_ONLY) return "bg-sky-100 text-sky-700";
+  if (points > 0) return "bg-neutral-200 text-neutral-600";
+  return "bg-neutral-100 text-neutral-400";
+}
+
 interface Props {
   match: Match;
   teamNames: Map<string, string>;
@@ -40,6 +70,8 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
   const team2 = match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code;
   const isPlaceholder = !match.team1_id || !match.team2_id;
   const locked = new Date(match.kickoff_at).getTime() <= Date.now();
+
+  const countdown = locked ? null : formatCountdown(match.kickoff_at);
 
   const [home, setHome] = useState(existing ? String(existing.predicted_home) : "");
   const [away, setAway] = useState(existing ? String(existing.predicted_away) : "");
@@ -99,7 +131,10 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
         <span className={`flex-1 font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>{team2}</span>
       </div>
 
-      <p className="text-xs text-neutral-500">{formatKickoff(match.kickoff_at)}</p>
+      <p className="flex items-center gap-2 text-xs text-neutral-500">
+        <span>{formatKickoff(match.kickoff_at)}</span>
+        {countdown && <span className="badge bg-pitch/10 text-pitch">{countdown}</span>}
+      </p>
 
       {locked ? (
         <LockedSummary match={match} existing={existing} />
@@ -148,15 +183,30 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
   );
 }
 
-/** Read-only view shown once a match has kicked off — picks can no longer change. */
+/**
+ * Read-only view shown once a match has kicked off — picks can no longer
+ * change. Always shows the final score once it's known (mirrors MatchCard),
+ * even if you never submitted a pick — "what happened" is information you
+ * want regardless of whether you played.
+ */
 function LockedSummary({ match, existing }: { match: Match; existing: MatchPrediction | null }) {
   const hasResult = match.home_score !== null && match.away_score !== null;
+  const finalScore = hasResult ? (
+    <span className="font-mono font-semibold text-neutral-900">
+      {match.home_score}–{match.away_score}
+    </span>
+  ) : (
+    <span className="text-neutral-400">not played yet</span>
+  );
 
   if (!existing) {
     return (
-      <p className="rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
-        You didn&rsquo;t lock in a pick before kickoff — no points possible for this match.
-      </p>
+      <div className="flex items-center justify-between rounded-lg bg-neutral-50 px-3 py-2 text-xs">
+        <span className="text-neutral-500">
+          You didn&rsquo;t lock in a pick before kickoff. Final: {finalScore}
+        </span>
+        <span className="badge bg-neutral-100 text-neutral-400">no pick</span>
+      </div>
     );
   }
 
@@ -167,18 +217,12 @@ function LockedSummary({ match, existing }: { match: Match; existing: MatchPredi
         <span className="font-mono font-semibold text-neutral-900">
           {existing.predicted_home}–{existing.predicted_away}
         </span>
-        {hasResult && (
-          <>
-            {" "}
-            · Final:{" "}
-            <span className="font-mono font-semibold text-neutral-900">
-              {match.home_score}–{match.away_score}
-            </span>
-          </>
-        )}
+        {" "}· Final: {finalScore}
       </span>
       {existing.points_awarded !== null && (
-        <span className="badge bg-gold/20 text-pitch">+{existing.points_awarded} pts</span>
+        <span className={`badge ${tierBadgeClass(existing.points_awarded)}`}>
+          +{existing.points_awarded} pts
+        </span>
       )}
     </div>
   );

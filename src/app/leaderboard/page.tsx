@@ -1,21 +1,72 @@
+import Link from "next/link";
+
+import { getLastSyncedAt } from "@/lib/data";
 import { getCurrentParticipant, getLeaderboard } from "@/lib/predictions";
 
 export const revalidate = 0;
 
 const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
+function formatSyncedAt(iso: string | null): string {
+  if (!iso) return "no data synced yet";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "moments ago";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 export default async function LeaderboardPage() {
-  const [rows, participant] = await Promise.all([getLeaderboard(), getCurrentParticipant()]);
+  const [rows, participant, lastSynced] = await Promise.all([
+    getLeaderboard(),
+    getCurrentParticipant(),
+    getLastSyncedAt(),
+  ]);
+  const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold">Leaderboard</h1>
-        <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-          Ranked by total points (match picks + tournament award picks), with exact-scoreline calls as the
-          tiebreaker. Updates automatically as results come in.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Leaderboard</h1>
+          <p className="mt-1 max-w-2xl text-sm text-neutral-500">
+            Ranked by total points (match picks + tournament award picks), with exact-scoreline calls as the
+            tiebreaker. Updates automatically as results come in.
+          </p>
+        </div>
+        <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
+          Live data synced {formatSyncedAt(lastSynced)}
+        </span>
       </div>
+
+      {myRow && (
+        <div className="card flex flex-wrap items-center gap-x-8 gap-y-2 bg-pitch p-4 text-gold">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Your standing</p>
+            <p className="text-lg font-bold">
+              {MEDALS[myRow.rank] ?? `#${myRow.rank}`} of {rows.length}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Total points</p>
+            <p className="text-lg font-bold tabular-nums">{myRow.total_points}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Match · Award</p>
+            <p className="text-lg font-bold tabular-nums">
+              {myRow.match_points} · {myRow.tournament_points}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Exact calls</p>
+            <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
+          </div>
+          <Link href="/predictions" className="ml-auto text-xs font-semibold underline-offset-2 hover:underline">
+            Add more picks →
+          </Link>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div className="card p-6 text-center text-sm text-neutral-500">

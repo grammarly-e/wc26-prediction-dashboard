@@ -55,7 +55,16 @@ With `npm run dev` still running and the dashboard open in your browser, open a 
 
 ## 6. Automate it (only needed once you deploy)
 
-`vercel.json` is already set up to run the sync automatically every 10 minutes once you deploy to Vercel. To test it manually after deploying:
+This needs two pieces, because Vercel's free Hobby plan only allows cron jobs to run **once a day** — anything more frequent fails to deploy with "Hobby accounts are limited to daily cron jobs."
+
+1. **`vercel.json`** (already committed) runs one sync a day at 5am UTC — a baseline that needs no extra setup and won't break your deploy.
+2. **`.github/workflows/sync.yml`** (already committed) runs a sync every 3 hours via GitHub's scheduler, which has no such limit. This is what actually keeps the data fresh. To turn it on:
+   - In your GitHub repo, go to **Settings > Secrets and variables > Actions** and add two repository secrets:
+     - `SYNC_URL` — your deployed sync endpoint, e.g. `https://your-app.vercel.app/api/sync`
+     - `SYNC_SECRET` — the same value you set for `SYNC_SECRET` in Vercel's environment variables
+   - That's it — it starts running on its own schedule. You can also trigger it on demand from the repo's **Actions** tab (find "Sync live World Cup data" → **Run workflow**).
+
+To test the endpoint manually at any time:
 
 ```bash
 curl -X POST https://your-deployment.vercel.app/api/sync \
@@ -63,6 +72,8 @@ curl -X POST https://your-deployment.vercel.app/api/sync \
 ```
 
 A response like `{"ok":true,...}` means everything is wired up correctly.
+
+> **If you previously hit Vercel's "triggers too many times in one day" error**: that was very likely caused by the old `*/10 * * * *` cron schedule failing Vercel's Hobby-plan validation on every single deploy attempt, not by anything you did. The schedule above (`0 5 * * *`) is valid and won't cause that anymore.
 
 ---
 

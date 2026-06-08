@@ -1,0 +1,31 @@
+name: Sync live World Cup data
+
+# Why this exists: Vercel's Hobby plan only allows cron jobs to run once a
+# day (vercel.json covers that daily baseline — see src/app/api/sync/route.ts
+# for the full explanation). GitHub Actions has no such limit, so this
+# workflow is what actually delivers the "every 3 hours" refresh cadence —
+# it just calls the same /api/sync endpoint the Vercel cron does, with the
+# same shared-secret header a person would use to trigger it by hand.
+#
+# One-time setup (see SETUP_AND_VERIFY.md): add two repo secrets under
+# Settings > Secrets and variables > Actions:
+#   SYNC_URL    — e.g. https://your-app.vercel.app/api/sync
+#   SYNC_SECRET — must match the SYNC_SECRET environment variable in Vercel
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {} # lets you trigger a sync manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/sync
+        run: |
+          curl --fail --silent --show-error -X POST "$SYNC_URL" \
+            -H "x-sync-secret: $SYNC_SECRET" \
+            -w "\nHTTP %{http_code}\n"
+        env:
+          SYNC_URL: ${{ secrets.SYNC_URL }}
+          SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
