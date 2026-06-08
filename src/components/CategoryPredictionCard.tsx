@@ -89,7 +89,19 @@ export default function CategoryPredictionCard({ category, teams, participantId,
     setStatus("saving");
     setError(null);
     const supabase = createClient();
-    const payload = isTeamPick
+
+    // Explicitly typed to match the `tournament_predictions` row shape —
+    // without this, TS infers a union of two object-literal shapes (one with
+    // predicted_team_id: string, the other: null) that Supabase's generated
+    // insert type (which wants a single shape with predicted_team_id: string | null)
+    // refuses to accept. This was failing the production build.
+    const payload: {
+      participant_id: string;
+      category_key: string;
+      predicted_team_id: string | null;
+      predicted_player_id: string | null;
+      predicted_player_name: string | null;
+    } = isTeamPick
       ? { participant_id: participantId, category_key: category.key, predicted_team_id: teamId, predicted_player_id: null, predicted_player_name: null }
       : { participant_id: participantId, category_key: category.key, predicted_team_id: null, predicted_player_id: null, predicted_player_name: trimmedName };
 
