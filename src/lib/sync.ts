@@ -30,8 +30,10 @@
 //
 // Respects football-data.org's free-tier rate limit (10 req/min): a full run
 // makes at most 3 provider calls (matches, standings, scorers), so even a
-// 1-minute cron interval would be safe — vercel.json uses 10 minutes, which
-// is plenty for a casual office prediction game.
+// 1-minute cron interval would be safe. In production this runs every 3 hours
+// via GitHub Actions (.github/workflows/sync.yml) plus once daily via Vercel
+// Cron as a backstop (vercel.json) — see the note atop src/app/api/sync/route.ts
+// for why two schedulers exist.
 // ============================================================================
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";

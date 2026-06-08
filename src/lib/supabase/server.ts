@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "@/lib/types";
 
@@ -18,7 +18,12 @@ export function createServerSupabaseClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        // Explicitly typed — Next.js 15's `cookies()` + `@supabase/ssr` don't
+        // export a shared type for this callback's argument, so TS falls back
+        // to implicit `any` (and fails the build under strict mode). This
+        // shape matches exactly what `createServerClient`'s `setAll` is called
+        // with: an array of { name, value, options } cookie descriptors.
+        setAll(cookiesToSet: { name: string; value: string; options?: CookieOptions }[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
