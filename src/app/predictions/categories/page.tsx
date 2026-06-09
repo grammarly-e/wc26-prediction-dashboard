@@ -10,18 +10,6 @@ import type { PredictionCategory } from "@/lib/types";
 
 export const revalidate = 0;
 
-// ----------------------------------------------------------------------------
-// Favourite Teams + Tournament Awards
-//
-// "My 3 Favourite Teams" -- champion/runner_up/third_place keys, framed as
-// casual "who are you rooting for" picks. Combined odds of the 3 picks must
-// be <= 25%.
-//
-// "Tournament Awards" -- Golden Boot, Golden Ball, Best Young Player.
-//
-// Neither section affects the leaderboard ranking (points_value = 0).
-// ----------------------------------------------------------------------------
-
 const FAVOURITE_KEYS = new Set(["champion", "runner_up", "third_place"]);
 const AWARD_KEYS = new Set(["golden_boot", "golden_ball", "best_young_player"]);
 
@@ -76,44 +64,55 @@ export default async function CategoryPredictionsPage() {
     ([, cats]) => cats.length > 0
   );
 
-  // Build serialisable props for FavouritesPickSection (Maps -> plain objects).
   const playingTeams = teams.filter((t) => !t.is_placeholder);
 
-  // team_id -> display name (plain object, serialisable to client component)
   const teamNamesRecord: Record<string, string> = {};
   for (const [id, name] of teamNames) {
     teamNamesRecord[id] = name;
   }
 
-  // category_key -> predicted_team_id for the 3 favourite slots
   const existingFavouriteIds: Record<string, string> = {};
   for (const key of ["champion", "runner_up", "third_place"]) {
     const pick = myPicks.get(key);
     if (pick?.predicted_team_id) existingFavouriteIds[key] = pick.predicted_team_id;
   }
 
-  // team_id -> odds % (plain object)
   const teamIdOdds: Record<string, number> = {};
   for (const team of playingTeams) {
     const odds = TEAM_ODDS[team.name];
     if (odds !== undefined) teamIdOdds[team.id] = odds;
   }
 
+  const totalCats = categories.length;
+  const filledCats = categories.filter((c) => myPicks.has(c.key)).length;
+
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">Favourites + Awards</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            These picks are just for fun -- they don't affect your leaderboard score. The ranking is
-            based entirely on match predictions.
+            These picks are just for fun &mdash; they don&rsquo;t affect your leaderboard score.
           </p>
+          <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
+            {categories.map((c) => {
+              const filled = myPicks.has(c.key);
+              return (
+                <span
+                  key={c.key}
+                  title={`${c.label}: ${filled ? "picked" : "not picked"}`}
+                  className={`h-2 w-2 rounded-full ${filled ? "bg-emerald-500" : "bg-neutral-200"}`}
+                />
+              );
+            })}
+            <span className="ml-1">{filledCats}/{totalCats} picks</span>
+          </div>
         </div>
         <Link
           href="/predictions"
           className="shrink-0 rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold hover:opacity-90"
         >
-          Match picks --&gt;
+          Match picks &rarr;
         </Link>
       </div>
 

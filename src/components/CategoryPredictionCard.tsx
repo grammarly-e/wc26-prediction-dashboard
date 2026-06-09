@@ -19,6 +19,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import PlayerCombobox from "@/components/PlayerCombobox";
 import type { PredictionCategory, Team, TournamentPrediction } from "@/lib/types";
 
 function formatLockTime(iso: string): string {
@@ -168,16 +169,13 @@ export default function CategoryPredictionCard({ category, teams, participantId,
               ))}
             </select>
           ) : (
-            <input
-              type="text"
+            <PlayerCombobox
               value={playerName}
-              onChange={(e) => {
-                setPlayerName(e.target.value);
+              onChange={(name) => {
+                setPlayerName(name);
                 setStatus("idle");
               }}
-              placeholder="Player name"
-              maxLength={80}
-              className="flex-1 rounded-lg border border-neutral-300 px-3 py-1.5 text-sm focus:border-pitch focus:outline-none"
+              placeholder="Search or type player name…"
             />
           )}
           <button

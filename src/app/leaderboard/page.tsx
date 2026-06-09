@@ -15,7 +15,7 @@ import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
 
-const MEDALS: Record<number, string> = { 1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949" };
+const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "no data synced yet";

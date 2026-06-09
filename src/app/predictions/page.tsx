@@ -112,16 +112,30 @@ export default async function PredictionsPage({
   const filteredMatches = filterMatches(matches, filterGroup, filterSearch, teamNames);
   const grouped = groupByRound(filteredMatches);
   const submittedCount = myPredictions.size;
+  const totalCount = matches.length;
+  const pct = totalCount > 0 ? Math.round((submittedCount / totalCount) * 100) : 0;
 
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">Make Your Predictions</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Signed in as <span className="font-semibold text-neutral-700">{participant.display_name}</span>{" "}
-            &middot; {submittedCount} of {matches.length} match picks submitted. Each one locks automatically at kickoff.
+            Signed in as{" "}
+            <span className="font-semibold text-neutral-700">{participant.display_name}</span>
+            {" "}&middot; picks lock automatically at kickoff.
           </p>
+          <div className="mt-3 flex items-center gap-3">
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200">
+              <div className="h-full rounded-full bg-pitch transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <span className="shrink-0 text-xs font-semibold tabular-nums text-neutral-600">
+              {submittedCount}/{totalCount} picks
+            </span>
+            {submittedCount === totalCount && totalCount > 0 && (
+              <span className="shrink-0 text-xs font-semibold text-emerald-600">All done ✓</span>
+            )}
+          </div>
         </div>
         <Link
           href="/predictions/categories"
@@ -131,7 +145,6 @@ export default async function PredictionsPage({
         </Link>
       </div>
 
-      {/* Scoring explainer */}
       <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
         <p className="mb-3 text-sm font-semibold">How scoring works</p>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -148,9 +161,7 @@ export default async function PredictionsPage({
             <span className="ml-2 font-bold text-neutral-400">0 pts</span>
           </div>
         </div>
-        <p className="mt-2 text-xs text-neutral-400">
-          Tiers don&rsquo;t stack &mdash; you score the single highest tier you qualify for.
-        </p>
+        <p className="mt-2 text-xs text-neutral-400">Tiers don&rsquo;t stack &mdash; you score the single highest tier you qualify for.</p>
       </div>
 
       <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />

@@ -67,7 +67,7 @@ async function handle(req: NextRequest) {
 
   try {
     const result = await runSync();
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json(result);
   } catch (err) {
     console.error("Sync job failed:", err);
     return NextResponse.json(

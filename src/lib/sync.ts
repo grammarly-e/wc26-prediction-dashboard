@@ -341,20 +341,77 @@ async function syncStandings(supabase: SupabaseClient<Database>) {
 
 // ----------------------------------------------------------------------------
 // Step 5b: top scorers (best effort — see provider caveat)
+// ESPN internal API is used as a fallback when football-data.org returns empty.
+// The ESPN endpoint is undocumented but stable; it begins returning data once
+// matches are played. Both sources normalise to the same flat shape before
+// being written.
 // ----------------------------------------------------------------------------
+
+interface NormalisedScorer { name: string; teamName: string; goals: number; assists: number }
+
+async function fetchScorersFromESPN(): Promise<NormalisedScorer[]> {
+  const url = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/statistics?view=scoring&limit=50&season=2026";
+  try {
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json = await resp.json() as any;
+    const entries: Array<{ athlete?: { displayName?: string }; team?: { displayName?: string }; statistics?: Array<{ name: string; displayValue: string }> }> =
+      json?.leaders ?? json?.statistics?.athletes ?? [];
+    if (!Array.isArray(entries) || !entries.length) return [];
+
+    return entries
+      .map((e) => {
+        const stat = (name: string) =>
+          Number(e.statistics?.find((s) => s.name === name)?.displayValue ?? 0) || 0;
+        const goals = stat("goals") || stat("totalGoals") || stat("goalsScoredByFoot");
+        const assists = stat("goalAssists") || stat("assists");
+        return {
+          name: e.athlete?.displayName ?? "",
+          teamName: e.team?.displayName ?? "",
+          goals,
+          assists,
+        };
+      })
+      .filter((e) => e.name.length > 0);
+  } catch {
+    return [];
+  }
+}
 
 async function syncTopScorers(supabase: SupabaseClient<Database>) {
   console.log("Fetching top scorers …");
-  let scorers;
+
+  let scorers: NormalisedScorer[] = [];
+
+  // Primary: football-data.org
   try {
-    scorers = await fetchScorers();
+    const raw = await fetchScorers();
+    if (raw?.length) {
+      scorers = raw.map((s) => ({
+        name: s.player.name,
+        teamName: s.team.name,
+        goals: s.goals,
+        assists: s.assists ?? 0,
+      }));
+      console.log(`  football-data.org: ${scorers.length} scorers.`);
+    }
   } catch (err) {
-    console.warn(`  ! Scorers fetch failed (free tier often lacks this for the WC until matches are played): ${(err as Error).message}`);
-    return;
+    console.warn(`  ! football-data.org scorers failed: ${(err as Error).message}`);
   }
-  if (!scorers || scorers.length === 0) {
-    console.log("  No scorer data yet.");
-    return;
+
+  // Fallback: ESPN internal API
+  if (!scorers.length) {
+    scorers = await fetchScorersFromESPN();
+    if (scorers.length) {
+      console.log(`  ESPN fallback: ${scorers.length} scorers.`);
+    } else {
+      console.log("  No scorer data yet from either source.");
+      return;
+    }
   }
 
   const { data: dbTeams, error: teamsErr } = await supabase.from("teams").select("id, name, is_placeholder");
@@ -363,64 +420,68 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
     (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
   );
 
-  // Clear and rewrite — simplest way to keep ranks correct as the list churns.
-  const { error: delErr } = await supabase.from("top_scorers").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-  if (delErr) console.error(`  ✗ Clearing top_scorers: ${delErr.message}`);
+  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+
+  // Clear stale rows before re-writing: the provider may return fewer than
+  // the previous set (e.g. corrected data), and we want the table to always
+  // reflect exactly what the provider currently says, ranked from scratch.
+  await supabase.from("top_scorers").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
   let written = 0;
   for (let i = 0; i < scorers.length; i++) {
     const s = scorers[i];
-    let team: DbTeamRow | undefined = teamsByName.get(s.team.name.trim().toLowerCase());
+    let team = teamsByName.get(s.teamName.trim().toLowerCase());
     if (!team) {
       for (const t of teamsByName.values()) {
-        if (namesLikelyMatch(t.name, s.team.name)) {
+        if (namesLikelyMatch(t.name, s.teamName)) {
           team = t;
           break;
         }
       }
     }
 
-    const { error } = await supabase.from("top_scorers").insert({
-      player_id: null, // resolved later once `players` rosters are populated
-      player_name: s.player.name,
-      team_id: team?.id ?? null,
-      goals: s.goals,
-      assists: s.assists ?? 0,
-      rank: i + 1,
-    });
+    const { error } = await supabase.from("top_scorers").upsert(
+      {
+        player_name: s.name,
+        player_id: null,
+        team_id: team?.id ?? null,
+        goals: s.goals,
+        assists: s.assists,
+        rank: i + 1,
+      },
+      { onConflict: "player_name" }
+    );
 
-    if (error) console.error(`  ✗ Top scorer ${s.player.name}: ${error.message}`);
+    if (error) console.error(`  ✗ Scorer ${s.name}: ${error.message}`);
     else written++;
   }
-  console.log(`Top scorers: ${written} rows written.`);
+  console.log(`Scorers: ${written} rows upserted.`);
 }
 
 // ----------------------------------------------------------------------------
-// Entry point
+// Main entry point
 // ----------------------------------------------------------------------------
 
-export interface SyncResult {
-  matchesUpdated: boolean;
-  finishedScored: number;
-}
-
-export async function runSync(): Promise<SyncResult> {
+export async function runSync(): Promise<{ ok: boolean; message: string; finishedScored: number }> {
   const supabase = getServiceRoleClient();
 
-  const start = Date.now();
-  console.log(`\n=== Live data sync — ${new Date().toISOString()} ===`);
+  try {
+    const { newlyFinished } = await syncMatches(supabase);
 
-  const { newlyFinished } = await syncMatches(supabase);
+    if (newlyFinished.length > 0) {
+      console.log(`Scoring ${newlyFinished.length} newly-finished match(es) …`);
+      await Promise.all(newlyFinished.map((m) => scoreFinishedMatch(supabase, m)));
+    }
 
-  for (const m of newlyFinished) {
-    await scoreFinishedMatch(supabase, m);
+    await syncStandings(supabase);
+    await syncTopScorers(supabase);
+
+    const msg = `Sync complete. ${newlyFinished.length} match(es) newly scored.`;
+    console.log(msg);
+    return { ok: true, message: msg, finishedScored: newlyFinished.length };
+  } catch (err) {
+    const msg = `Sync failed: ${(err as Error).message}`;
+    console.error(msg);
+    return { ok: false, message: msg, finishedScored: 0 };
   }
-
-  await syncStandings(supabase);
-  await syncTopScorers(supabase);
-
-  const ms = Date.now() - start;
-  console.log(`=== Sync complete in ${ms}ms. ${newlyFinished.length} match(es) newly finished and scored. ===\n`);
-
-  return { matchesUpdated: true, finishedScored: newlyFinished.length };
 }

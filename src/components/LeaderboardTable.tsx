@@ -6,7 +6,7 @@ import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
 import type { Match, MatchPrediction } from "@/lib/types";
 
-const MEDALS: Record<number, string> = { 1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949" };
+const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 export interface LeaderboardTableRow {
   participant_id: string;
