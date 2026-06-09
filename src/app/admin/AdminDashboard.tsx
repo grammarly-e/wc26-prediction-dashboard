@@ -59,6 +59,10 @@ export default function AdminDashboard({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
+  // Recompute state
+  const [recomputing, setRecomputing] = useState(false);
+  const [recomputeResult, setRecomputeResult] = useState<string | null>(null);
+
   // Participant state
   const [participants, setParticipants] = useState(initialParticipants);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -118,6 +122,23 @@ export default function AdminDashboard({
     }
   }
 
+  async function runRecompute() {
+    setRecomputing(true);
+    setRecomputeResult(null);
+    const res = await fetch("/api/admin/recompute", { method: "POST" });
+    setRecomputing(false);
+    if (res.ok) {
+      const body = await res.json() as { groupsRecomputed?: number; slotsUpdated?: number };
+      setRecomputeResult(
+        `Standings recomputed (${body.groupsRecomputed ?? 0} groups), ${body.slotsUpdated ?? 0} bracket slot(s) updated.`
+      );
+      startTransition(() => router.refresh());
+    } else {
+      const body = await res.json() as { error?: string };
+      setRecomputeResult("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
   async function deleteParticipant(id: string, name: string) {
     if (!confirm(`Delete "${name}" and all their predictions? This cannot be undone.`)) return;
     setDeletingId(id);
@@ -146,9 +167,19 @@ export default function AdminDashboard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         <div className="flex flex-wrap items-center gap-3">
+          {recomputeResult && (
+            <span className="text-xs text-neutral-500">{recomputeResult}</span>
+          )}
           {syncResult && (
             <span className="text-xs text-neutral-500">{syncResult}</span>
           )}
+          <button
+            onClick={runRecompute}
+            disabled={recomputing}
+            className="rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold hover:opacity-90 disabled:opacity-50"
+          >
+            {recomputing ? "Recomputing…" : "Recompute Standings & Bracket"}
+          </button>
           <button
             onClick={runSync}
             disabled={syncing}
