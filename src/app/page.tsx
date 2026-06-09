@@ -172,6 +172,12 @@ export default async function MatchesPage({
   const scheduledIds = allMatches.filter((m) => m.status === "scheduled").map((m) => m.id);
   const consensus = await getMatchConsensus(scheduledIds);
 
+  // Group stage is "complete" only when every group stage match is finished.
+  // Until then, Round of 32 team names are hidden as TBD in the schedule.
+  const groupStageMatches = allMatches.filter((m) => m.round === "Group Stage");
+  const groupStageComplete =
+    groupStageMatches.length > 0 && groupStageMatches.every((m) => m.status === "finished");
+
   const liveMatches = allMatches.filter((m) => m.status === "live");
   const recentResults = allMatches
     .filter((m) => m.status === "finished")
@@ -249,6 +255,7 @@ export default async function MatchesPage({
                       match={m}
                       teamNames={teamNames}
                       consensus={consensus.get(m.id)}
+                      forceNamesTBD={round === "Round of 32" && !groupStageComplete}
                     />
                   ))}
                 </div>

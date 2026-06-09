@@ -66,7 +66,7 @@ export default async function StandingsPage() {
       <div>
         <h1 className="text-2xl font-bold">Group Standings</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Top two in each group (highlighted) advance to the Round of 32. Updates live as matches finish.
+          Top two in each group (highlighted) advance automatically. The 8 best 3rd-place finishers across all 12 groups also advance. Updates live as matches finish.
         </p>
       </div>
 

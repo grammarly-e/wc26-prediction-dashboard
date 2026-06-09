@@ -19,17 +19,20 @@ export default function MatchCard({
   match,
   teamNames,
   consensus,
+  forceNamesTBD,
 }: {
   match: Match;
   teamNames: Map<string, string>;
   consensus?: ConsensusData;
+  /** When true, always show "TBD" for both teams (used for R32 before group stage is complete). */
+  forceNamesTBD?: boolean;
 }) {
-  const team1 = match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code;
-  const team2 = match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code;
+  const team1 = forceNamesTBD ? "TBD" : (match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code);
+  const team2 = forceNamesTBD ? "TBD" : (match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code);
   const hasScore = match.home_score !== null && match.away_score !== null;
-  const isPlaceholder = !match.team1_id || !match.team2_id;
-  const flag1 = flagForTeam(team1);
-  const flag2 = flagForTeam(team2);
+  const isPlaceholder = forceNamesTBD || !match.team1_id || !match.team2_id;
+  const flag1 = forceNamesTBD ? null : flagForTeam(team1);
+  const flag2 = forceNamesTBD ? null : flagForTeam(team2);
 
   return (
     <div className="card flex flex-col gap-2 p-4">

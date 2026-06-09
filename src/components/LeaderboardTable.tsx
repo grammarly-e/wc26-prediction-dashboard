@@ -1,11 +1,12 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import Link from "next/link";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
 import type { Match, MatchPrediction } from "@/lib/types";
 
-const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+const MEDALS: Record<number, string> = { 1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949" };
 
 export interface LeaderboardTableRow {
   participant_id: string;
@@ -127,7 +128,13 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                       <span aria-hidden="true" className="text-xs text-neutral-400">
                         {isOpen ? "▾" : "▸"}
                       </span>
-                      {row.display_name}
+                      <Link
+                        href={`/participants/${row.participant_id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="hover:text-pitch hover:underline underline-offset-2"
+                      >
+                        {row.display_name}
+                      </Link>
                       {isMe && <span className="badge bg-pitch text-gold">You</span>}
                       {favHits > 0 && (
                         <span className="badge bg-emerald-100 text-emerald-700 text-[10px]">

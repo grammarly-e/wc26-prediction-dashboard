@@ -4,8 +4,7 @@ const LINKS = [
   { href: "/", label: "Matches" },
   { href: "/standings", label: "Standings" },
   { href: "/scorers", label: "Top Scorers" },
-  { href: "/predictions", label: "Predictions" },
-  { href: "/participants", label: "Participants" },
+  { href: "/predictions", label: "Predict Scores" },
   { href: "/leaderboard", label: "Leaderboard" },
 ];
 

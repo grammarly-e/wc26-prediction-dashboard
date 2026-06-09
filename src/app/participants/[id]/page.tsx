@@ -95,8 +95,8 @@ export default async function ParticipantPage({
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       {/* Back link */}
-      <Link href="/participants" className="mb-6 inline-flex items-center gap-1 text-sm text-neutral-400 hover:text-pitch">
-        ← All participants
+      <Link href="/leaderboard" className="mb-6 inline-flex items-center gap-1 text-sm text-neutral-400 hover:text-pitch">
+        ← Leaderboard
       </Link>
 
       {/* Header */}

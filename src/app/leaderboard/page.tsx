@@ -15,7 +15,7 @@ import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
 
-const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+const MEDALS: Record<number, string> = { 1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949" };
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "no data synced yet";
@@ -27,7 +27,7 @@ function formatSyncedAt(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-// ── Determine actual top 3 from match results ─────────────────────────────────
+// ── Determine actual top 3 from match results ─────────────────────────────────────────────────
 //
 // Returns a Set of team IDs (champion + runner-up + 3rd place) once the
 // Final and 3rd-place matches are both finished. Empty Set until then.
@@ -91,7 +91,7 @@ function StageLeaderCard({
   );
 }
 
-// ── Award Accuracy Card ───────────────────────────────────────────────────────
+// ── Award Accuracy Card ────────────────────────────────────────────────────────────
 
 const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
   { key: "champion",          label: "Champion" },
@@ -163,7 +163,7 @@ function AwardAccuracyCard({
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── Page ────────────────────────────────────────────────────────────────────────────
 
 export default async function LeaderboardPage() {
   const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, ...awardPicksArrays] =
@@ -239,8 +239,8 @@ export default async function LeaderboardPage() {
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
             Ranked by match prediction points. 3 pts for correct result and goal difference, 1 pt for
-            correct result only. Best calls (3-pt predictions) break ties. Click a participant to see
-            their match-by-match breakdown.
+            correct result only. Best calls (3-pt predictions) break ties. Click a row to expand inline,
+            or click a name to see their full prediction sheet.
           </p>
         </div>
         <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
@@ -282,7 +282,7 @@ export default async function LeaderboardPage() {
             <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
           </div>
           <Link href="/predictions" className="ml-auto text-xs font-semibold underline-offset-2 hover:underline">
-            Add more picks --&gt;
+            Predict scores --&gt;
           </Link>
         </div>
       )}
