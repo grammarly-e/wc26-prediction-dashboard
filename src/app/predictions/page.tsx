@@ -153,7 +153,7 @@ export default async function PredictionsPage({
         </p>
       </div>
 
-      <FilterBar />
+      <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
 
       {ROUND_ORDER.map((round) => {
         const roundMatches = grouped.get(round) ?? [];
