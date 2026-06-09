@@ -191,12 +191,6 @@ export default async function LeaderboardPage() {
             <p className="text-lg font-bold tabular-nums">{myRow.match_points}</p>
           </div>
           <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Group · KO</p>
-            <p className="text-lg font-bold tabular-nums">
-              {myRow.group_stage_points} · {myRow.knockout_points}
-            </p>
-          </div>
-          <div>
             <p className="text-xs uppercase tracking-wide text-gold/70">Exact calls</p>
             <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
           </div>
