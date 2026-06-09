@@ -274,12 +274,12 @@ export async function getAwardPicks(categoryKey: string): Promise<AwardPickRow[]
       predicted_player_id: string | null;
       predicted_player_name: string | null;
       points_awarded: number | null;
-      participants: { display_name: string } | null;
+      participants: { display_name: string }[] | { display_name: string } | null;
     }>
   )
     .map((row) => ({
       participant_id: row.participant_id,
-      display_name: row.participants?.display_name ?? "Unknown",
+      display_name: (Array.isArray(row.participants) ? row.participants[0]?.display_name : row.participants?.display_name) ?? "Unknown",
       predicted_team_id: row.predicted_team_id,
       predicted_player_id: row.predicted_player_id,
       predicted_player_name: row.predicted_player_name,
