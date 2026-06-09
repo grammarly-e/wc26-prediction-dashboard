@@ -12,7 +12,7 @@
 // reflection of "what football-data.org reported as of the last sync run."
 // ============================================================================
 
-import { createServerSupabaseClient } from "./supabase/server";
+import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import type { Match, Standing, Team, TopScorer } from "./types";
 
 /** id → display name, for resolving team_id columns in the UI. */
@@ -175,6 +175,47 @@ export async function getTopScorers(): Promise<ScorerRow[]> {
     ...rest,
     team_name: teams?.name ?? null,
   }));
+}
+
+// ----------------------------------------------------------------------------
+// Pre-kickoff consensus — how are participants collectively picking each match?
+// Uses the service-role client to bypass RLS: RLS prevents participants from
+// reading each other's picks before kickoff, but showing aggregate counts
+// (no individual attribution) is safe and useful. Only totals are returned;
+// the individual rows are never surfaced to the browser.
+// ----------------------------------------------------------------------------
+
+export interface ConsensusData {
+  total: number;
+  home_win_count: number;
+  draw_count: number;
+  away_win_count: number;
+}
+
+/**
+ * Returns a ConsensusData entry for each match ID in the input list that has
+ * at least one prediction. Matches with zero picks are omitted from the map.
+ * Server-only — uses the service-role client.
+ */
+export async function getMatchConsensus(matchIds: string[]): Promise<Map<string, ConsensusData>> {
+  if (matchIds.length === 0) return new Map();
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("match_predictions")
+    .select("match_id, predicted_home, predicted_away")
+    .in("match_id", matchIds);
+  if (error) throw error;
+
+  const result = new Map<string, ConsensusData>();
+  for (const pred of (data ?? []) as { match_id: string; predicted_home: number; predicted_away: number }[]) {
+    const entry = result.get(pred.match_id) ?? { total: 0, home_win_count: 0, draw_count: 0, away_win_count: 0 };
+    entry.total += 1;
+    if (pred.predicted_home > pred.predicted_away) entry.home_win_count += 1;
+    else if (pred.predicted_home === pred.predicted_away) entry.draw_count += 1;
+    else entry.away_win_count += 1;
+    result.set(pred.match_id, entry);
+  }
+  return result;
 }
 
 /** Most recent sync timestamp, derived from `matches.updated_at` — shown as a freshness indicator. */

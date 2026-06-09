@@ -132,9 +132,10 @@ export default async function LeaderboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Ranked by total points (match picks + tournament award picks), with exact-scoreline calls as the
-            tiebreaker. Click a participant to see their match-by-match breakdown — picks for matches that haven&rsquo;t
-            kicked off yet stay hidden for everyone. Updates automatically as results come in.
+            Ranked by match prediction points, with exact-scoreline calls as the tiebreaker. Tournament
+            award picks are scored separately and don&rsquo;t affect this ranking. Click a participant to see
+            their match-by-match breakdown — picks for matches that haven&rsquo;t kicked off yet stay hidden
+            for everyone. Updates automatically as results come in.
           </p>
         </div>
         <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
@@ -186,14 +187,8 @@ export default async function LeaderboardPage() {
             </p>
           </div>
           <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Total points</p>
-            <p className="text-lg font-bold tabular-nums">{myRow.total_points}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Match · Award</p>
-            <p className="text-lg font-bold tabular-nums">
-              {myRow.match_points} · {myRow.tournament_points}
-            </p>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Match points</p>
+            <p className="text-lg font-bold tabular-nums">{myRow.match_points}</p>
           </div>
           <div>
             <p className="text-xs uppercase tracking-wide text-gold/70">Exact calls</p>
