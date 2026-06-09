@@ -71,11 +71,15 @@ export interface GroupStanding extends Standing {
   team_name: string;
 }
 
-function blankStanding(team: Pick<Team, "id" | "name" | "group_letter">): GroupStanding {
+function blankStanding(
+  teamId: string,
+  groupLetter: string,
+  teamName: string
+): GroupStanding {
   return {
-    id: `pending-${team.id}`,
-    group_letter: team.group_letter ?? "",
-    team_id: team.id,
+    id: `pending-${teamId}`,
+    group_letter: groupLetter,
+    team_id: teamId,
     played: 0,
     won: 0,
     drawn: 0,
@@ -86,18 +90,25 @@ function blankStanding(team: Pick<Team, "id" | "name" | "group_letter">): GroupS
     points: 0,
     rank: null,
     updated_at: "",
-    team_name: team.name,
+    team_name: teamName,
   };
 }
 
 /**
  * Group standings (A-L), each table sorted by rank.
- * Groups with no materialized standings get zero-value rows from the team roster.
+ *
+ * Three-layer fallback to guarantee all 48 teams appear:
+ *   1. Standings table (has computed data after recompute).
+ *   2. Teams table (group_letter IS NOT NULL) -- adds zero-rows for any
+ *      individual team missing from standings, not just empty groups.
+ *   3. Group-stage match data -- catches teams whose group_letter is NULL
+ *      in the teams table (e.g. API-synced duplicates) but ARE referenced
+ *      in matches.
  */
 export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]>> {
   const supabase = createServerSupabaseClient();
 
-  const [standingsRes, teamsRes] = await Promise.all([
+  const [standingsRes, teamsRes, matchesRes] = await Promise.all([
     supabase
       .from("standings")
       .select("*, teams(name)")
@@ -106,12 +117,19 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
     supabase
       .from("teams")
       .select("id, name, group_letter")
-      .not("group_letter", "is", null)
+      .not("is_placeholder", "is", null)
       .order("name", { ascending: true }),
+    supabase
+      .from("matches")
+      .select("group_letter, team1_id, team2_id")
+      .eq("round", "Group Stage")
+      .not("group_letter", "is", null),
   ]);
   if (standingsRes.error) throw standingsRes.error;
   if (teamsRes.error) throw teamsRes.error;
+  // matchesRes failure is non-fatal -- we still show what we have.
 
+  // ── Layer 1: build from standings table ───────────────────────────────────
   const byGroup = new Map<string, GroupStanding[]>();
   for (const row of standingsRes.data as Array<Standing & { teams: { name: string } | null }>) {
     const { teams, ...rest } = row;
@@ -121,13 +139,45 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
     byGroup.set(entry.group_letter, list);
   }
 
-  const materializedGroups = new Set(byGroup.keys());
-  for (const team of teamsRes.data as Array<Pick<Team, "id" | "name" | "group_letter">>) {
-    const letter = team.group_letter;
-    if (!letter || materializedGroups.has(letter)) continue;
-    const list = byGroup.get(letter) ?? [];
-    list.push(blankStanding(team));
-    byGroup.set(letter, list);
+  // Track which team IDs are already accounted for.
+  const seen = new Set<string>();
+  for (const rows of byGroup.values()) {
+    for (const r of rows) seen.add(r.team_id);
+  }
+
+  // Build a name + group lookup from ALL teams (including those with NULL group_letter).
+  const teamById = new Map<string, { name: string; group_letter: string | null }>();
+  for (const t of teamsRes.data as Array<{ id: string; name: string; group_letter: string | null }>) {
+    teamById.set(t.id, { name: t.name, group_letter: t.group_letter });
+  }
+
+  // ── Layer 2: zero-rows for teams in the teams table with group_letter set ─
+  for (const [id, t] of teamById) {
+    if (!t.group_letter || seen.has(id)) continue;
+    const list = byGroup.get(t.group_letter) ?? [];
+    list.push(blankStanding(id, t.group_letter, t.name));
+    byGroup.set(t.group_letter, list);
+    seen.add(id);
+  }
+
+  // ── Layer 3: zero-rows for teams found only via match data ────────────────
+  if (!matchesRes.error && matchesRes.data) {
+    for (const m of matchesRes.data as Array<{
+      group_letter: string | null;
+      team1_id: string | null;
+      team2_id: string | null;
+    }>) {
+      if (!m.group_letter) continue;
+      for (const tid of [m.team1_id, m.team2_id]) {
+        if (!tid || seen.has(tid)) continue;
+        const info = teamById.get(tid);
+        const name = info?.name ?? "Unknown";
+        const list = byGroup.get(m.group_letter) ?? [];
+        list.push(blankStanding(tid, m.group_letter, name));
+        byGroup.set(m.group_letter, list);
+        seen.add(tid);
+      }
+    }
   }
 
   return byGroup;
