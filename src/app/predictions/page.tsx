@@ -30,12 +30,6 @@ function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
   return grouped;
 }
 
-// ----------------------------------------------------------------------------
-// Knockout lock — teams are TBD until the group stage is complete.
-// The locked card blocks both the form and the score input, so there's no
-// way to accidentally submit a pick for a match that hasn't been drawn yet.
-// ----------------------------------------------------------------------------
-
 function teamsConfirmed(match: Match): boolean {
   return Boolean(match.team1_id && match.team2_id);
 }
@@ -58,10 +52,6 @@ function LockedPredictionCard({ match }: { match: Match }) {
     </div>
   );
 }
-
-// ----------------------------------------------------------------------------
-// Server-side filter logic — mirrors the filter on the main matches page.
-// ----------------------------------------------------------------------------
 
 function filterMatches(
   matches: Match[],
@@ -129,15 +119,15 @@ export default async function PredictionsPage({
         <div>
           <h1 className="text-2xl font-bold">Make Your Predictions</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Signed in as <span className="font-semibold text-neutral-700">{participant.display_name}</span> ·{" "}
-            {submittedCount} of {matches.length} match picks submitted. Each one locks automatically at kickoff.
+            Signed in as <span className="font-semibold text-neutral-700">{participant.display_name}</span>{" "}
+            &middot; {submittedCount} of {matches.length} match picks submitted. Each one locks automatically at kickoff.
           </p>
         </div>
         <Link
           href="/predictions/categories"
           className="badge shrink-0 bg-pitch text-gold hover:opacity-90"
         >
-          Favourite teams + awards →
+          Favourite teams + awards &rarr;
         </Link>
       </div>
 
@@ -158,7 +148,39 @@ export default async function PredictionsPage({
             <span className="ml-2 font-bold text-neutral-400">0 pts</span>
           </div>
         </div>
-        <p className="mt-2 text-xs text-neutral-400">Tiers don&rsquo;t stack — you score the single highest tier you qualify for.</p>
+        <p className="mt-2 text-xs text-neutral-400">
+          Tiers don&rsquo;t stack &mdash; you score the single highest tier you qualify for.
+        </p>
       </div>
 
- 
+      <FilterBar />
+
+      {ROUND_ORDER.map((round) => {
+        const roundMatches = grouped.get(round) ?? [];
+        if (roundMatches.length === 0) return null;
+        return (
+          <section key={round}>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-400">
+              {round}
+            </h2>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {roundMatches.map((match) =>
+                round !== "Group Stage" && !teamsConfirmed(match) ? (
+                  <LockedPredictionCard key={match.id} match={match} />
+                ) : (
+                  <MatchPredictionCard
+                    key={match.id}
+                    match={match}
+                    teamNames={teamNames}
+                    participantId={participant.id}
+                    existing={myPredictions.get(match.id) ?? null}
+                  />
+                )
+              )}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
