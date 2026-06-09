@@ -62,9 +62,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Recompute standings + bracket in the background (don't await to keep
-    // the response fast — the client refreshes the page anyway).
-    recomputeStandingsAndBracket(supabase).catch(() => {/* silent — admin can click Recompute manually */});
+    // Await recompute so standings are updated before the client refreshes.
+    await recomputeStandingsAndBracket(supabase).catch(() => {/* silent */});
   }
 
   return NextResponse.json({ ok: true });

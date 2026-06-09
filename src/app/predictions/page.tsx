@@ -141,70 +141,24 @@ export default async function PredictionsPage({
         </Link>
       </div>
 
-      <details className="card group p-4 text-sm text-neutral-600 open:pb-4 [&:not([open])]:pb-3">
-        <summary className="cursor-pointer list-none font-semibold text-neutral-800 marker:hidden">
-          <span className="inline-flex items-center gap-2">
-            How scoring works
-            <span className="text-xs font-normal text-neutral-400 group-open:hidden">(click to expand)</span>
-          </span>
-        </summary>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <p className="flex items-center justify-between rounded-lg bg-gold/10 px-3 py-2">
-            <span>Exact scoreline</span>
-            <span className="font-mono font-bold text-pitch">25 pts</span>
-          </p>
-          <p className="flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2">
-            <span>Correct result + goal difference</span>
-            <span className="font-mono font-bold text-emerald-700">15 pts</span>
-          </p>
-          <p className="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
-            <span>Correct result only (W/D/L)</span>
-            <span className="font-mono font-bold text-sky-700">8 pts</span>
-          </p>
-          <p className="flex items-center justify-between rounded-lg bg-neutral-100 px-3 py-2">
-            <span>Close call (both scores within 1 goal, wrong result)</span>
-            <span className="font-mono font-bold text-neutral-600">3 pts</span>
-          </p>
+      {/* Scoring explainer */}
+      <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+        <p className="mb-3 text-sm font-semibold">How scoring works</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm">
+            <span className="text-neutral-700">Correct result + goal difference</span>
+            <span className="ml-2 font-bold text-pitch">3 pts</span>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+            <span className="text-neutral-700">Correct result only (W/D/L)</span>
+            <span className="ml-2 font-bold text-emerald-700">1 pt</span>
+          </div>
+          <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm sm:col-span-2">
+            <span className="text-neutral-500">Wrong result</span>
+            <span className="ml-2 font-bold text-neutral-400">0 pts</span>
+          </div>
         </div>
-        <p className="mt-3 text-xs text-neutral-400">
-          Tiers don&rsquo;t stack — you get the single highest one you qualify for.
-        </p>
-      </details>
-
-      <div className="flex flex-col gap-4">
-        <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
-
-        {filteredMatches.length === 0 && (
-          <p className="card p-4 text-sm text-neutral-500">No matches found for this filter.</p>
-        )}
-
-        {ROUND_ORDER.map((round) => {
-          const roundMatches = grouped.get(round) ?? [];
-          if (roundMatches.length === 0) return null;
-          return (
-            <section key={round}>
-              <h2 className="mb-3 text-lg font-bold">
-                {round} <span className="font-normal text-neutral-400">({roundMatches.length})</span>
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {roundMatches.map((m) =>
-                  round !== "Group Stage" && !teamsConfirmed(m) ? (
-                    <LockedPredictionCard key={m.id} match={m} />
-                  ) : (
-                    <MatchPredictionCard
-                      key={m.id}
-                      match={m}
-                      teamNames={teamNames}
-                      participantId={participant.id}
-                      existing={myPredictions.get(m.id) ?? null}
-                    />
-                  )
-                )}
-              </div>
-            </section>
-          );
-        })}
+        <p className="mt-2 text-xs text-neutral-400">Tiers don&rsquo;t stack — you score the single highest tier you qualify for.</p>
       </div>
-    </div>
-  );
-}
+
+ 

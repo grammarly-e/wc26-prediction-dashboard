@@ -186,19 +186,24 @@ async function upsertStandings(
     updated_at: new Date().toISOString(),
   }).gte("played", 0);
 
+  const rows = [];
   for (const [groupLetter, teams] of standings) {
     for (const t of teams) {
-      await supabase
-        .from("standings")
-        .update({
-          played: t.played, won: t.won, drawn: t.drawn, lost: t.lost,
-          goals_for: t.goals_for, goals_against: t.goals_against,
-          goal_diff: t.goal_diff, points: t.points, rank: t.rank,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("team_id", t.team_id)
-        .eq("group_letter", groupLetter);
+      rows.push({
+        group_letter: groupLetter,
+        team_id: t.team_id,
+        played: t.played, won: t.won, drawn: t.drawn, lost: t.lost,
+        goals_for: t.goals_for, goals_against: t.goals_against,
+        goal_diff: t.goal_diff, points: t.points, rank: t.rank,
+        updated_at: new Date().toISOString(),
+      });
     }
+  }
+  if (rows.length > 0) {
+    // upsert creates rows that don't exist yet (pre-tournament) and updates existing ones
+    await supabase
+      .from("standings")
+      .upsert(rows, { onConflict: "group_letter,team_id" });
   }
 }
 
