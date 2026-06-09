@@ -38,10 +38,11 @@ export async function POST(request: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // 2. If the match is now finished with a real score, score all predictions
-  //    for it immediately. Then recompute standings + bracket so the UI
-  //    reflects the new result without a manual "Recompute" click.
-  if (body.status === "finished" && body.homeScore != null && body.awayScore != null) {
+  // 2. Whenever both scores are present, score predictions and recompute
+  //    standings immediately — regardless of status. computeStandings only
+  //    counts "finished" matches, but triggering on score entry means the
+  //    admin doesn't have to worry about status order.
+  if (body.homeScore != null && body.awayScore != null) {
     const { data: predictions, error: predErr } = await supabase
       .from("match_predictions")
       .select("id, predicted_home, predicted_away")
@@ -63,7 +64,18 @@ export async function POST(request: Request) {
     }
 
     // Await recompute so standings are updated before the client refreshes.
-    await recomputeStandingsAndBracket(supabase).catch(() => {/* silent */});
+    // Surface errors in the response body so admin can see if recompute failed.
+    let recomputeError: string | null = null;
+    try {
+      await recomputeStandingsAndBracket(supabase);
+    } catch (err) {
+      recomputeError = err instanceof Error ? err.message : String(err);
+      console.error("[update-match] recompute failed:", recomputeError);
+    }
+
+    if (recomputeError) {
+      return NextResponse.json({ ok: true, recomputeError }, { status: 200 });
+    }
   }
 
   return NextResponse.json({ ok: true });

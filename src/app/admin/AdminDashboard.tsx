@@ -99,6 +99,10 @@ export default function AdminDashboard({
     });
     setSaving(false);
     if (res.ok) {
+      const body = await res.json() as { ok: boolean; recomputeError?: string };
+      if (body.recomputeError) {
+        alert("Match saved but standings recompute failed:\n" + body.recomputeError);
+      }
       setEditingId(null);
       startTransition(() => router.refresh());
     } else {
