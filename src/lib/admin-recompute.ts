@@ -269,7 +269,7 @@ async function upsertStandings(
   // Reset all rows to 0 first -- clears stale data when a result is removed
   await supabase.from("standings").update({
     played: 0, won: 0, drawn: 0, lost: 0,
-    goals_for: 0, goals_against: 0, goal_diff: 0, points: 0, rank: null,
+    goals_for: 0, goals_against: 0, points: 0, rank: null,
     updated_at: new Date().toISOString(),
   }).gte("played", 0);
 
@@ -281,7 +281,7 @@ async function upsertStandings(
         team_id: t.team_id,
         played: t.played, won: t.won, drawn: t.drawn, lost: t.lost,
         goals_for: t.goals_for, goals_against: t.goals_against,
-        goal_diff: t.goal_diff, points: t.points, rank: t.rank,
+        points: t.points, rank: t.rank,
         updated_at: new Date().toISOString(),
       });
     }
