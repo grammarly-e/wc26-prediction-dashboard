@@ -25,7 +25,7 @@ const ROUND_ORDER: MatchRound[] = [
 const MIN_INSIGHT_SAMPLE = 3;
 
 // ----------------------------------------------------------------------------
-// Server-side filter logic — reads ?group= and ?q= from the URL.
+// Server-side filter logic -- reads ?group= and ?q= from the URL.
 // Filtering runs on the server so no client bundle cost.
 // ----------------------------------------------------------------------------
 
@@ -65,7 +65,7 @@ function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
 }
 
 // ----------------------------------------------------------------------------
-// Insight callouts — Biggest Upset / Best Read
+// Insight callouts -- Biggest Upset / Best Read
 // ----------------------------------------------------------------------------
 
 interface InsightCallout {
@@ -129,9 +129,9 @@ function InsightCard({
   return (
     <div className={`flex flex-col gap-1.5 rounded-xl border p-4 shadow-sm ${toneClasses}`}>
       <span className={`text-xs font-semibold uppercase tracking-wide ${accentClasses}`}>{label}</span>
-      <span className="text-sm text-neutral-500">#{match.match_number} · {match.round}</span>
+      <span className="text-sm text-neutral-500">#{match.match_number} &middot; {match.round}</span>
       <span className="text-base font-semibold text-neutral-900">
-        {flag1 ? `${flag1} ` : ""}{team1} {match.home_score}–{match.away_score} {flag2 ? `${flag2} ` : ""}{team2}
+        {flag1 ? `${flag1} ` : ""}{team1} {match.home_score}-{match.away_score} {flag2 ? `${flag2} ` : ""}{team2}
       </span>
       <span className="text-xs text-neutral-600">{summary}</span>
       {insight.exact_score_count > 0 && (
@@ -148,7 +148,7 @@ function SyncFooter({ lastSyncedAt }: { lastSyncedAt: string | null }) {
     <p className="mt-4 text-center text-xs text-neutral-400">
       {lastSyncedAt
         ? `Live data last synced ${new Date(lastSyncedAt).toLocaleString()} · source: football-data.org`
-        : "No live data synced yet — run `npm run sync` once FOOTBALL_DATA_API_KEY is configured."}
+        : "No live data synced yet -- run `npm run sync` once FOOTBALL_DATA_API_KEY is configured."}
       {" "}This page updates automatically as new data arrives.
     </p>
   );
@@ -187,9 +187,9 @@ export default async function MatchesPage({
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-bold">World Cup 2026 — Matches</h1>
+        <h1 className="text-2xl font-bold">World Cup 2026 -- Matches</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Live scores, results, and the full schedule — {allMatches.length} matches in total.
+          Live scores, results, and the full schedule -- {allMatches.length} matches in total.
           Upcoming matches show how participants are collectively predicting them.
         </p>
       </div>

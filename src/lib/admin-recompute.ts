@@ -4,13 +4,13 @@
 //   • POST /api/admin/update-match  (auto-recompute on every admin save)
 //
 // recomputeAll(supabase)
-//   ① Rescores predictions for every finished match (applies updated SCORING
-//      constants — useful after a scoring system change)
-//   ② Recomputes group standings from match results
-//   ③ Resolves knockout bracket slot codes (1X/2X/3X/WN/LN)
+//   ① Patches team.group_letter for any team whose group is null (sync artifact)
+//   ② Rescores predictions for every finished match
+//   ③ Recomputes group standings from match results
+//   ④ Resolves knockout bracket slot codes (1X/2X/3X/WN/LN)
 //
 // recomputeStandingsAndBracket(supabase)
-//   Same as above, but skips step ①. Used by update-match after it has
+//   Same as above but skips step ②. Used by update-match after it has
 //   already scored the single updated match inline.
 // ============================================================================
 
@@ -60,11 +60,43 @@ interface ThirdEntry {
   goals_for: number;
 }
 
-// ── Step 0: Rescore all finished match predictions ────────────────────────────
+// ── Step 0: Patch missing team group_letters ──────────────────────────────────
 //
-// Iterates every finished match, re-runs scoreMatchPrediction for each
-// prediction, and writes the updated points_awarded + score_breakdown back.
-// This makes a scoring-system change take effect on all historical data.
+// When the live-data sync creates team records from the API, it sometimes
+// uses a different name variant than what was seeded (e.g. "Turkey" vs
+// "Türkiye"), resulting in a new team row with group_letter = NULL. This
+// function infers the correct group from match data and patches those rows.
+// Idempotent — only updates rows where group_letter IS NULL.
+
+async function patchTeamGroupLetters(
+  supabase: SupabaseClient,
+  matches: DbMatch[]
+): Promise<number> {
+  const updates: Array<{ id: string; group_letter: string }> = [];
+  for (const m of matches) {
+    if (m.round !== "Group Stage" || !m.group_letter) continue;
+    for (const tid of [m.team1_id, m.team2_id]) {
+      if (tid) updates.push({ id: tid, group_letter: m.group_letter });
+    }
+  }
+
+  // Deduplicate by team_id
+  const seen = new Set<string>();
+  let patched = 0;
+  for (const u of updates) {
+    if (seen.has(u.id)) continue;
+    seen.add(u.id);
+    const { error } = await supabase
+      .from("teams")
+      .update({ group_letter: u.group_letter })
+      .eq("id", u.id)
+      .is("group_letter", null);
+    if (!error) patched++;
+  }
+  return patched;
+}
+
+// ── Step 1: Rescore all finished match predictions ────────────────────────────
 
 async function rescoreAllFinishedMatches(
   supabase: SupabaseClient,
@@ -100,21 +132,39 @@ async function rescoreAllFinishedMatches(
   return rescored;
 }
 
-// ── Step 1: Compute group standings ──────────────────────────────────────────
+// ── Step 2: Compute group standings ──────────────────────────────────────────
 
 export function computeStandings(
   teams: DbTeam[],
   matches: DbMatch[]
 ): Map<string, TeamStats[]> {
   const statsMap = new Map<string, Map<string, TeamStats>>();
+
+  function zeroStats(teamId: string): TeamStats {
+    return {
+      team_id: teamId, played: 0, won: 0, drawn: 0, lost: 0,
+      goals_for: 0, goals_against: 0, goal_diff: 0, points: 0, rank: 0,
+    };
+  }
+
+  // Seed groups from team records where group_letter is already set.
   for (const t of teams) {
     if (t.is_placeholder || !t.group_letter) continue;
     const g = t.group_letter;
     if (!statsMap.has(g)) statsMap.set(g, new Map());
-    statsMap.get(g)!.set(t.id, {
-      team_id: t.id, played: 0, won: 0, drawn: 0, lost: 0,
-      goals_for: 0, goals_against: 0, goal_diff: 0, points: 0, rank: 0,
-    });
+    statsMap.get(g)!.set(t.id, zeroStats(t.id));
+  }
+
+  // Also seed groups directly from match data — this catches teams whose
+  // group_letter is NULL in the teams table (e.g. API-synced duplicates with
+  // a different name variant than the original seeded record).
+  for (const m of matches) {
+    if (m.round !== "Group Stage" || !m.group_letter || !m.team1_id || !m.team2_id) continue;
+    const g = m.group_letter;
+    if (!statsMap.has(g)) statsMap.set(g, new Map());
+    const groupMap = statsMap.get(g)!;
+    if (!groupMap.has(m.team1_id)) groupMap.set(m.team1_id, zeroStats(m.team1_id));
+    if (!groupMap.has(m.team2_id)) groupMap.set(m.team2_id, zeroStats(m.team2_id));
   }
 
   for (const m of matches) {
@@ -133,12 +183,7 @@ export function computeStandings(
     if (!groupMap) continue;
 
     for (const tid of [m.team1_id, m.team2_id]) {
-      if (!groupMap.has(tid)) {
-        groupMap.set(tid, {
-          team_id: tid, played: 0, won: 0, drawn: 0, lost: 0,
-          goals_for: 0, goals_against: 0, goal_diff: 0, points: 0, rank: 0,
-        });
-      }
+      if (!groupMap.has(tid)) groupMap.set(tid, zeroStats(tid));
     }
 
     const t1 = groupMap.get(m.team1_id)!;
@@ -173,7 +218,7 @@ export function computeStandings(
   return result;
 }
 
-// ── Step 2: Upsert standings rows ─────────────────────────────────────────────
+// ── Step 3: Upsert standings rows ─────────────────────────────────────────────
 
 async function upsertStandings(
   supabase: SupabaseClient,
@@ -207,7 +252,7 @@ async function upsertStandings(
   }
 }
 
-// ── Step 3: Resolve knockout slot codes ───────────────────────────────────────
+// ── Step 4: Resolve knockout slot codes ───────────────────────────────────────
 
 function resolveSlotCode(
   code: string,
@@ -313,6 +358,29 @@ async function resolveKnockoutSlots(
   return updated;
 }
 
+// ── Helper: fetch matches + patch + re-fetch teams ────────────────────────────
+
+async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: DbMatch[]; teams: DbTeam[] }> {
+  const { data: matchData, error: matchErr } = await supabase
+    .from("matches")
+    .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status")
+    .order("match_number", { ascending: true });
+  if (matchErr) throw new Error(matchErr.message);
+
+  const matches = matchData as DbMatch[];
+
+  // Patch any teams whose group_letter is NULL but appear in group stage matches.
+  await patchTeamGroupLetters(supabase, matches);
+
+  // Re-fetch teams so computeStandings sees the patched group letters.
+  const { data: teamData, error: teamErr } = await supabase
+    .from("teams")
+    .select("id, group_letter, is_placeholder");
+  if (teamErr) throw new Error(teamErr.message);
+
+  return { matches, teams: teamData as DbTeam[] };
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface RecomputeResult {
@@ -321,20 +389,9 @@ export interface RecomputeResult {
   slotsUpdated: number;
 }
 
-/** Full recompute: rescores all predictions + standings + bracket. */
+/** Full recompute: patches team groups + rescores all predictions + standings + bracket. */
 export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeResult> {
-  const [matchRes, teamRes] = await Promise.all([
-    supabase
-      .from("matches")
-      .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status")
-      .order("match_number", { ascending: true }),
-    supabase.from("teams").select("id, group_letter, is_placeholder"),
-  ]);
-  if (matchRes.error) throw new Error(matchRes.error.message);
-  if (teamRes.error)  throw new Error(teamRes.error.message);
-
-  const matches = matchRes.data as DbMatch[];
-  const teams   = teamRes.data as DbTeam[];
+  const { matches, teams } = await fetchAndPatchData(supabase);
 
   const [predictionsRescored, standings] = await Promise.all([
     rescoreAllFinishedMatches(supabase, matches),
@@ -349,22 +406,12 @@ export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeR
 
 /**
  * Standings + bracket recompute only — skips rescoring predictions.
- * Call this after update-match has already scored the specific match inline,
- * to propagate the result to the standings table and bracket slots.
+ * Call this after update-match has already scored the specific match inline.
  */
-export async function recomputeStandingsAndBracket(supabase: SupabaseClient): Promise<{ groupsRecomputed: number; slotsUpdated: number }> {
-  const [matchRes, teamRes] = await Promise.all([
-    supabase
-      .from("matches")
-      .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status")
-      .order("match_number", { ascending: true }),
-    supabase.from("teams").select("id, group_letter, is_placeholder"),
-  ]);
-  if (matchRes.error) throw new Error(matchRes.error.message);
-  if (teamRes.error)  throw new Error(teamRes.error.message);
-
-  const matches = matchRes.data as DbMatch[];
-  const teams   = teamRes.data as DbTeam[];
+export async function recomputeStandingsAndBracket(
+  supabase: SupabaseClient
+): Promise<{ groupsRecomputed: number; slotsUpdated: number }> {
+  const { matches, teams } = await fetchAndPatchData(supabase);
 
   const standings = computeStandings(teams, matches);
   await upsertStandings(supabase, standings);

@@ -39,9 +39,9 @@ export async function POST(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // 2. Whenever both scores are present, score predictions and recompute
-  //    standings immediately — regardless of status. computeStandings only
+  //    standings immediately -- regardless of status. computeStandings only
   //    counts "finished" matches, but triggering on score entry means the
-  //    admin doesn't have to worry about status order.
+  //    admin does not have to worry about status order.
   if (body.homeScore != null && body.awayScore != null) {
     const { data: predictions, error: predErr } = await supabase
       .from("match_predictions")

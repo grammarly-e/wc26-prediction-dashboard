@@ -1,7 +1,7 @@
 "use client";
 
 // ============================================================================
-// Match filter bar — group pills (A–L + Knockout) and a team-name search input.
+// Match filter bar -- group pills (A-L + Knockout) and a team-name search input.
 //
 // Architecture: URL-based filtering. Clicking a group pill or typing in the
 // search box updates ?group= / ?q= params and triggers a server re-render,
@@ -19,7 +19,7 @@ export default function FilterBar({
   activeGroup,
   activeSearch,
 }: {
-  /** Currently active group filter: a letter A–L, "knockout", or null (all). */
+  /** Currently active group filter: a letter A-L, "knockout", or null (all). */
   activeGroup: string | null;
   /** Currently active team-name search string. */
   activeSearch: string;
@@ -82,7 +82,7 @@ export default function FilterBar({
           type="text"
           value={searchValue}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search by team…"
+          placeholder="Search by team..."
           className="w-full max-w-xs rounded-lg border border-neutral-200 px-3 py-1.5 text-sm focus:border-pitch focus:outline-none"
         />
         {searchValue && (
@@ -93,7 +93,7 @@ export default function FilterBar({
             }}
             className="text-xs text-neutral-400 hover:text-neutral-600"
           >
-            Clear ×
+            Clear x
           </button>
         )}
       </div>

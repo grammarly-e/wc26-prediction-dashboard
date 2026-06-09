@@ -1,21 +1,11 @@
 // ============================================================================
 // Server-side data access for the live-data viewing pages (src/app/**/page.tsx).
-//
-// These all run in Server Components via the cookie-aware Supabase client
-// (createServerSupabaseClient — respects RLS, so visitors only ever see what
-// the policies in supabase/migrations/0002_row_level_security.sql allow:
-// tournament data — teams, matches, standings, scorers — is public-read by
-// design, which is exactly what these pages need).
-//
-// Kept thin and table-shaped on purpose: the sync job
-// (scripts/sync-live-data.ts) is the only writer, so reads here are a direct
-// reflection of "what football-data.org reported as of the last sync run."
 // ============================================================================
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import type { Match, Standing, Team, TopScorer } from "./types";
 
-/** id → display name, for resolving team_id columns in the UI. */
+/** id -> display name, for resolving team_id columns in the UI. */
 export async function getTeamNameMap(): Promise<Map<string, string>> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase.from("teams").select("id, name");
@@ -23,7 +13,7 @@ export async function getTeamNameMap(): Promise<Map<string, string>> {
   return new Map((data as Pick<Team, "id" | "name">[]).map((t) => [t.id, t.name]));
 }
 
-/** All teams, alphabetical — backs the team picker on the tournament-award prediction page. */
+/** All teams, alphabetical. */
 export async function getTeams(): Promise<Team[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase.from("teams").select("*").order("name", { ascending: true });
@@ -39,7 +29,7 @@ export async function getMatches(): Promise<Match[]> {
   return data as Match[];
 }
 
-/** Matches currently in progress — the "what's on right now" view. */
+/** Matches currently in progress. */
 export async function getLiveMatches(): Promise<Match[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -51,7 +41,7 @@ export async function getLiveMatches(): Promise<Match[]> {
   return data as Match[];
 }
 
-/** Next scheduled matches (soonest first) — used on the overview when nothing's live. */
+/** Next scheduled matches (soonest first). */
 export async function getUpcomingMatches(limit = 6): Promise<Match[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -64,7 +54,7 @@ export async function getUpcomingMatches(limit = 6): Promise<Match[]> {
   return data as Match[];
 }
 
-/** Most recently finished matches (latest first) — "results" strip on the overview. */
+/** Most recently finished matches (latest first). */
 export async function getRecentResults(limit = 6): Promise<Match[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -81,11 +71,6 @@ export interface GroupStanding extends Standing {
   team_name: string;
 }
 
-/**
- * A zero-value standings row for a team that hasn't played yet — same shape
- * as a real `standings` row (minus a stable `id`/`updated_at`, which the
- * sync job assigns once it materializes the row from results).
- */
 function blankStanding(team: Pick<Team, "id" | "name" | "group_letter">): GroupStanding {
   return {
     id: `pending-${team.id}`,
@@ -106,13 +91,8 @@ function blankStanding(team: Pick<Team, "id" | "name" | "group_letter">): GroupS
 }
 
 /**
- * Group standings (A–L), each table sorted by rank.
- *
- * Groups whose matches haven't kicked off yet have no rows in `standings`
- * (the sync job only materializes a group's table once results start coming
- * in) — for those, we backfill all four rostered teams as zero-value rows
- * (sorted alphabetically) so the page always shows a complete table instead
- * of an empty state.
+ * Group standings (A-L), each table sorted by rank.
+ * Groups with no materialized standings get zero-value rows from the team roster.
  */
 export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]>> {
   const supabase = createServerSupabaseClient();
@@ -141,11 +121,6 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
     byGroup.set(entry.group_letter, list);
   }
 
-  // Backfill: any group with no materialized standings yet gets a full
-  // four-team table of zero rows, built straight from the team roster.
-  // (Snapshot which groups are already materialized *before* adding blanks —
-  // otherwise the first backfilled team would mark its group as "already has
-  // rows" and the other three teams would be skipped.)
   const materializedGroups = new Set(byGroup.keys());
   for (const team of teamsRes.data as Array<Pick<Team, "id" | "name" | "group_letter">>) {
     const letter = team.group_letter;
@@ -178,11 +153,7 @@ export async function getTopScorers(): Promise<ScorerRow[]> {
 }
 
 // ----------------------------------------------------------------------------
-// Pre-kickoff consensus — how are participants collectively picking each match?
-// Uses the service-role client to bypass RLS: RLS prevents participants from
-// reading each other's picks before kickoff, but showing aggregate counts
-// (no individual attribution) is safe and useful. Only totals are returned;
-// the individual rows are never surfaced to the browser.
+// Pre-kickoff consensus
 // ----------------------------------------------------------------------------
 
 export interface ConsensusData {
@@ -192,11 +163,6 @@ export interface ConsensusData {
   away_win_count: number;
 }
 
-/**
- * Returns a ConsensusData entry for each match ID in the input list that has
- * at least one prediction. Matches with zero picks are omitted from the map.
- * Server-only — uses the service-role client.
- */
 export async function getMatchConsensus(matchIds: string[]): Promise<Map<string, ConsensusData>> {
   if (matchIds.length === 0) return new Map();
   const supabase = createServiceRoleClient();
@@ -218,7 +184,7 @@ export async function getMatchConsensus(matchIds: string[]): Promise<Map<string,
   return result;
 }
 
-/** Most recent sync timestamp, derived from `matches.updated_at` — shown as a freshness indicator. */
+/** Most recent sync timestamp. */
 export async function getLastSyncedAt(): Promise<string | null> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase

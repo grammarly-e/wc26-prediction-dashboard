@@ -35,7 +35,7 @@ export default function MatchCard({
     <div className="card flex flex-col gap-2 p-4">
       <div className="flex items-center justify-between text-xs text-neutral-500">
         <span>
-          #{match.match_number} · {match.round}
+          #{match.match_number} &middot; {match.round}
           {match.group_letter ? ` · Group ${match.group_letter}` : ""}
         </span>
         <StatusBadge status={match.status} />

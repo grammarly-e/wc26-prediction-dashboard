@@ -67,7 +67,7 @@ export default function AdminDashboard({
   const [participants, setParticipants] = useState(initialParticipants);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Build round → match map
+  // Build round -> match map
   const grouped = new Map<string, Match[]>();
   for (const round of ROUND_ORDER) grouped.set(round, []);
   for (const m of matches) {
@@ -118,7 +118,7 @@ export default function AdminDashboard({
     setSyncing(false);
     if (res.ok) {
       const body = await res.json() as { finishedScored?: number };
-      setSyncResult(`Done — ${body.finishedScored ?? 0} match(es) scored.`);
+      setSyncResult(`Done - ${body.finishedScored ?? 0} match(es) scored.`);
       startTransition(() => router.refresh());
     } else {
       const body = await res.json() as { error?: string };
@@ -182,14 +182,14 @@ export default function AdminDashboard({
             disabled={recomputing}
             className="rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold hover:opacity-90 disabled:opacity-50"
           >
-            {recomputing ? "Recomputing…" : "Recompute Standings & Bracket"}
+            {recomputing ? "Recomputing..." : "Recompute Standings & Bracket"}
           </button>
           <button
             onClick={runSync}
             disabled={syncing}
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
           >
-            {syncing ? "Syncing…" : "Sync & Score"}
+            {syncing ? "Syncing..." : "Sync & Score"}
           </button>
           <button
             onClick={logout}
@@ -251,7 +251,7 @@ export default function AdminDashboard({
                       {/* Current result */}
                       {m.status === "finished" && m.home_score != null ? (
                         <span className="font-mono text-sm font-bold text-pitch">
-                          {m.home_score}–{m.away_score}
+                          {m.home_score}-{m.away_score}
                         </span>
                       ) : null}
 
@@ -283,7 +283,7 @@ export default function AdminDashboard({
                             placeholder="H"
                             className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
                           />
-                          <span className="text-neutral-400">–</span>
+                          <span className="text-neutral-400">-</span>
                           <input
                             type="number"
                             min={0}
@@ -316,7 +316,7 @@ export default function AdminDashboard({
                             disabled={saving}
                             className="rounded bg-pitch px-3 py-1 text-xs font-semibold text-gold disabled:opacity-50"
                           >
-                            {saving ? "…" : "Save"}
+                            {saving ? "..." : "Save"}
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
@@ -353,7 +353,7 @@ export default function AdminDashboard({
               <div className="flex-1">
                 <p className="text-sm font-medium">{p.display_name}</p>
                 <p className="text-xs text-neutral-400">
-                  Joined {new Date(p.created_at).toLocaleDateString()} ·{" "}
+                  Joined {new Date(p.created_at).toLocaleDateString()} &middot;{" "}
                   {p.match_prediction_count} match picks
                 </p>
               </div>
@@ -362,7 +362,7 @@ export default function AdminDashboard({
                 disabled={deletingId === p.id}
                 className="rounded px-3 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-50"
               >
-                {deletingId === p.id ? "…" : "Delete"}
+                {deletingId === p.id ? "..." : "Delete"}
               </button>
             </div>
           ))}
