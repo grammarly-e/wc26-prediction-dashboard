@@ -1,17 +1,151 @@
 import MatchCard from "@/components/MatchCard";
+import FilterBar from "@/components/FilterBar";
+import { flagForTeam } from "@/lib/flags";
 import {
   getLastSyncedAt,
-  getLiveMatches,
-  getRecentResults,
+  getMatchConsensus,
+  getMatches,
   getTeamNameMap,
-  getUpcomingMatches,
 } from "@/lib/data";
+import { getMatchInsights, type MatchInsight } from "@/lib/predictions";
+import type { Match, MatchRound } from "@/lib/types";
 
-export const revalidate = 0; // always fetch fresh — Realtime keeps the client in sync anyway
+export const revalidate = 0;
+
+const ROUND_ORDER: MatchRound[] = [
+  "Group Stage",
+  "Round of 32",
+  "Round of 16",
+  "Quarter-final",
+  "Semi-final",
+  "Match for third place",
+  "Final",
+];
+
+const MIN_INSIGHT_SAMPLE = 3;
+
+// ----------------------------------------------------------------------------
+// Server-side filter logic — reads ?group= and ?q= from the URL.
+// Filtering runs on the server so no client bundle cost.
+// ----------------------------------------------------------------------------
+
+function filterMatches(
+  matches: Match[],
+  group: string | null,
+  search: string,
+  teamNames: Map<string, string>
+): Match[] {
+  return matches.filter((m) => {
+    if (group) {
+      if (group === "knockout") {
+        if (m.round === "Group Stage") return false;
+      } else {
+        if (m.group_letter !== group.toUpperCase()) return false;
+      }
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      const t1 = (m.team1_id ? teamNames.get(m.team1_id) ?? m.team1_code : m.team1_code).toLowerCase();
+      const t2 = (m.team2_id ? teamNames.get(m.team2_id) ?? m.team2_code : m.team2_code).toLowerCase();
+      if (!t1.includes(q) && !t2.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
+  const grouped = new Map<MatchRound, Match[]>();
+  for (const round of ROUND_ORDER) grouped.set(round, []);
+  for (const m of matches) {
+    const list = grouped.get(m.round) ?? [];
+    list.push(m);
+    grouped.set(m.round, list);
+  }
+  return grouped;
+}
+
+// ----------------------------------------------------------------------------
+// Insight callouts — Biggest Upset / Best Read
+// ----------------------------------------------------------------------------
+
+interface InsightCallout {
+  match: Match;
+  insight: MatchInsight;
+}
+
+function pickInsightCallouts(
+  matches: Match[],
+  insights: Map<string, MatchInsight>
+): { upset: InsightCallout | null; bestRead: InsightCallout | null } {
+  const eligible: InsightCallout[] = [];
+  for (const match of matches) {
+    const insight = insights.get(match.id);
+    if (insight && insight.total_predictions >= MIN_INSIGHT_SAMPLE) {
+      eligible.push({ match, insight });
+    }
+  }
+  if (eligible.length === 0) return { upset: null, bestRead: null };
+
+  let lowest = eligible[0];
+  let highest = eligible[0];
+  for (const entry of eligible) {
+    if (entry.insight.correct_outcome_rate < lowest.insight.correct_outcome_rate) lowest = entry;
+    if (entry.insight.correct_outcome_rate > highest.insight.correct_outcome_rate) highest = entry;
+  }
+
+  if (lowest.match.id === highest.match.id) {
+    return lowest.insight.correct_outcome_rate < 0.5
+      ? { upset: lowest, bestRead: null }
+      : { upset: null, bestRead: lowest };
+  }
+
+  return { upset: lowest, bestRead: highest };
+}
+
+function InsightCard({
+  label,
+  tone,
+  callout,
+  teamNames,
+}: {
+  label: string;
+  tone: "upset" | "bestRead";
+  callout: InsightCallout;
+  teamNames: Map<string, string>;
+}) {
+  const { match, insight } = callout;
+  const team1 = match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code;
+  const team2 = match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code;
+  const flag1 = flagForTeam(team1);
+  const flag2 = flagForTeam(team2);
+  const pct = Math.round(insight.correct_outcome_rate * 100);
+  const toneClasses = tone === "upset" ? "border-red-200 bg-red-50" : "border-emerald-300 bg-emerald-50";
+  const accentClasses = tone === "upset" ? "text-red-700" : "text-emerald-700";
+  const summary =
+    tone === "upset"
+      ? `Only ${insight.correct_outcome_count} of ${insight.total_predictions} predictions (${pct}%) called the right result.`
+      : `${insight.correct_outcome_count} of ${insight.total_predictions} predictions (${pct}%) called the right result.`;
+
+  return (
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-4 shadow-sm ${toneClasses}`}>
+      <span className={`text-xs font-semibold uppercase tracking-wide ${accentClasses}`}>{label}</span>
+      <span className="text-sm text-neutral-500">#{match.match_number} · {match.round}</span>
+      <span className="text-base font-semibold text-neutral-900">
+        {flag1 ? `${flag1} ` : ""}{team1} {match.home_score}–{match.away_score} {flag2 ? `${flag2} ` : ""}{team2}
+      </span>
+      <span className="text-xs text-neutral-600">{summary}</span>
+      {insight.exact_score_count > 0 && (
+        <span className="text-xs text-neutral-500">
+          {insight.exact_score_count} {insight.exact_score_count === 1 ? "person" : "people"} nailed the exact scoreline.
+        </span>
+      )}
+    </div>
+  );
+}
 
 function SyncFooter({ lastSyncedAt }: { lastSyncedAt: string | null }) {
   return (
-    <p className="mt-8 text-center text-xs text-neutral-400">
+    <p className="mt-4 text-center text-xs text-neutral-400">
       {lastSyncedAt
         ? `Live data last synced ${new Date(lastSyncedAt).toLocaleString()} · source: football-data.org`
         : "No live data synced yet — run `npm run sync` once FOOTBALL_DATA_API_KEY is configured."}
@@ -20,66 +154,109 @@ function SyncFooter({ lastSyncedAt }: { lastSyncedAt: string | null }) {
   );
 }
 
-function Section({ title, matches, teamNames, emptyText }: {
-  title: string;
-  matches: Awaited<ReturnType<typeof getLiveMatches>>;
-  teamNames: Map<string, string>;
-  emptyText: string;
+export default async function MatchesPage({
+  searchParams,
+}: {
+  searchParams: { group?: string; q?: string };
 }) {
-  return (
-    <section>
-      <h2 className="mb-3 text-lg font-bold">{title}</h2>
-      {matches.length === 0 ? (
-        <p className="card p-4 text-sm text-neutral-500">{emptyText}</p>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {matches.map((m) => (
-            <MatchCard key={m.id} match={m} teamNames={teamNames} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
+  const filterGroup = searchParams.group ?? null;
+  const filterSearch = (searchParams.q ?? "").trim();
 
-export default async function OverviewPage() {
-  const [live, upcoming, results, teamNames, lastSyncedAt] = await Promise.all([
-    getLiveMatches(),
-    getUpcomingMatches(),
-    getRecentResults(),
+  const [allMatches, teamNames, insights, lastSyncedAt] = await Promise.all([
+    getMatches(),
     getTeamNameMap(),
+    getMatchInsights(),
     getLastSyncedAt(),
   ]);
+
+  const scheduledIds = allMatches.filter((m) => m.status === "scheduled").map((m) => m.id);
+  const consensus = await getMatchConsensus(scheduledIds);
+
+  const liveMatches = allMatches.filter((m) => m.status === "live");
+  const recentResults = allMatches
+    .filter((m) => m.status === "finished")
+    .sort((a, b) => new Date(b.kickoff_at).getTime() - new Date(a.kickoff_at).getTime())
+    .slice(0, 6);
+
+  const { upset, bestRead } = pickInsightCallouts(allMatches, insights);
+
+  // Apply filters to the schedule section only (live/results always show)
+  const scheduleMatches = filterMatches(allMatches, filterGroup, filterSearch, teamNames);
+  const grouped = groupByRound(scheduleMatches);
 
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-bold">World Cup 2026 — Live Overview</h1>
+        <h1 className="text-2xl font-bold">World Cup 2026 — Matches</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Real-time scores, results, and what&apos;s coming up next, synced automatically from football-data.org.
+          Live scores, results, and the full schedule — {allMatches.length} matches in total.
+          Upcoming matches show how participants are collectively predicting them.
         </p>
       </div>
 
-      <Section
-        title={`Live now (${live.length})`}
-        matches={live}
-        teamNames={teamNames}
-        emptyText="Nothing kicking off right now — check back at the next scheduled kickoff."
-      />
+      {liveMatches.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-lg font-bold">
+            Live now <span className="font-normal text-neutral-400">({liveMatches.length})</span>
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {liveMatches.map((m) => (
+              <MatchCard key={m.id} match={m} teamNames={teamNames} />
+            ))}
+          </div>
+        </section>
+      )}
 
-      <Section
-        title="Latest results"
-        matches={results}
-        teamNames={teamNames}
-        emptyText="No matches have finished yet."
-      />
+      {recentResults.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-lg font-bold">Latest results</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {recentResults.map((m) => (
+              <MatchCard key={m.id} match={m} teamNames={teamNames} />
+            ))}
+          </div>
+        </section>
+      )}
 
-      <Section
-        title="Coming up"
-        matches={upcoming}
-        teamNames={teamNames}
-        emptyText="The full schedule is loaded — kickoff times will appear here as the tournament approaches."
-      />
+      {(upset || bestRead) && !filterGroup && !filterSearch && (
+        <div className={`grid gap-3 ${upset && bestRead ? "sm:grid-cols-2" : "sm:max-w-md"}`}>
+          {upset && <InsightCard label="Biggest Upset" tone="upset" callout={upset} teamNames={teamNames} />}
+          {bestRead && <InsightCard label="Best Read" tone="bestRead" callout={bestRead} teamNames={teamNames} />}
+        </div>
+      )}
+
+      <section className="flex flex-col gap-6">
+        <div>
+          <h2 className="mb-3 text-lg font-bold">Full schedule</h2>
+          <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
+        </div>
+
+        {scheduleMatches.length === 0 ? (
+          <p className="card p-4 text-sm text-neutral-500">No matches found for this filter.</p>
+        ) : (
+          ROUND_ORDER.map((round) => {
+            const roundMatches = grouped.get(round) ?? [];
+            if (roundMatches.length === 0) return null;
+            return (
+              <div key={round}>
+                <h3 className="mb-3 font-semibold text-neutral-700">
+                  {round} <span className="font-normal text-neutral-400">({roundMatches.length})</span>
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {roundMatches.map((m) => (
+                    <MatchCard
+                      key={m.id}
+                      match={m}
+                      teamNames={teamNames}
+                      consensus={consensus.get(m.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </section>
 
       <SyncFooter lastSyncedAt={lastSyncedAt} />
     </div>

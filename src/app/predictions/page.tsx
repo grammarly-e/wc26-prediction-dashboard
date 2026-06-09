@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import FilterBar from "@/components/FilterBar";
 import JoinForm from "@/components/JoinForm";
 import MatchPredictionCard from "@/components/MatchPredictionCard";
 import { getMatches, getTeamNameMap } from "@/lib/data";
@@ -29,7 +30,68 @@ function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
   return grouped;
 }
 
-export default async function PredictionsPage() {
+// ----------------------------------------------------------------------------
+// Knockout lock — teams are TBD until the group stage is complete.
+// The locked card blocks both the form and the score input, so there's no
+// way to accidentally submit a pick for a match that hasn't been drawn yet.
+// ----------------------------------------------------------------------------
+
+function teamsConfirmed(match: Match): boolean {
+  return Boolean(match.team1_id && match.team2_id);
+}
+
+function LockedPredictionCard({ match }: { match: Match }) {
+  return (
+    <div className="card flex flex-col gap-2 border border-dashed border-neutral-200 p-4 text-sm opacity-60">
+      <div className="flex items-center justify-between text-xs text-neutral-500">
+        <span>#{match.match_number} · {match.round}</span>
+        <span className="badge bg-neutral-100 text-neutral-500">Locked</span>
+      </div>
+      <div className="flex items-center justify-center gap-3 py-1 font-medium text-neutral-400 italic">
+        <span>{match.team1_code || "TBD"}</span>
+        <span className="text-xs not-italic">vs</span>
+        <span>{match.team2_code || "TBD"}</span>
+      </div>
+      <p className="text-center text-xs text-neutral-400">
+        Unlocks once knockout teams are decided
+      </p>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Server-side filter logic — mirrors the filter on the main matches page.
+// ----------------------------------------------------------------------------
+
+function filterMatches(
+  matches: Match[],
+  group: string | null,
+  search: string,
+  teamNames: Map<string, string>
+): Match[] {
+  return matches.filter((m) => {
+    if (group) {
+      if (group === "knockout") {
+        if (m.round === "Group Stage") return false;
+      } else {
+        if (m.group_letter !== group.toUpperCase()) return false;
+      }
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      const t1 = (m.team1_id ? teamNames.get(m.team1_id) ?? m.team1_code : m.team1_code).toLowerCase();
+      const t2 = (m.team2_id ? teamNames.get(m.team2_id) ?? m.team2_code : m.team2_code).toLowerCase();
+      if (!t1.includes(q) && !t2.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+export default async function PredictionsPage({
+  searchParams,
+}: {
+  searchParams: { group?: string; q?: string };
+}) {
   const participant = await getCurrentParticipant();
 
   if (!participant) {
@@ -38,9 +100,9 @@ export default async function PredictionsPage() {
         <div>
           <h1 className="text-2xl font-bold">Make Your Predictions</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Predict the score of every match, then call the tournament&rsquo;s biggest awards — Champion, Golden
-            Boot, and more. Picks lock the moment a match kicks off or a category&rsquo;s deadline passes, so
-            everyone&rsquo;s guessing blind. Most accurate predictor wins bragging rights on the leaderboard.
+            Predict the score of every match, then pick your favourite teams. Picks lock the moment a
+            match kicks off, so everyone&rsquo;s guessing blind. Most accurate predictor wins bragging rights
+            on the leaderboard.
           </p>
         </div>
         <JoinForm />
@@ -48,12 +110,17 @@ export default async function PredictionsPage() {
     );
   }
 
+  const filterGroup = searchParams.group ?? null;
+  const filterSearch = (searchParams.q ?? "").trim();
+
   const [matches, teamNames, myPredictions] = await Promise.all([
     getMatches(),
     getTeamNameMap(),
     getMyMatchPredictions(participant.id),
   ]);
-  const grouped = groupByRound(matches);
+
+  const filteredMatches = filterMatches(matches, filterGroup, filterSearch, teamNames);
+  const grouped = groupByRound(filteredMatches);
   const submittedCount = myPredictions.size;
 
   return (
@@ -70,7 +137,7 @@ export default async function PredictionsPage() {
           href="/predictions/categories"
           className="badge shrink-0 bg-pitch text-gold hover:opacity-90"
         >
-          Tournament award picks →
+          Favourite teams + awards →
         </Link>
       </div>
 
@@ -100,34 +167,44 @@ export default async function PredictionsPage() {
           </p>
         </div>
         <p className="mt-3 text-xs text-neutral-400">
-          Tiers don&rsquo;t stack — you get the single highest one you qualify for. Calling the exact scoreline
-          is worth more than three times a plain win/draw/loss guess, so it pays to commit to a real prediction
-          rather than hedging.
+          Tiers don&rsquo;t stack — you get the single highest one you qualify for.
         </p>
       </details>
 
-      {ROUND_ORDER.map((round) => {
-        const roundMatches = grouped.get(round) ?? [];
-        if (roundMatches.length === 0) return null;
-        return (
-          <section key={round}>
-            <h2 className="mb-3 text-lg font-bold">
-              {round} <span className="font-normal text-neutral-400">({roundMatches.length})</span>
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {roundMatches.map((m) => (
-                <MatchPredictionCard
-                  key={m.id}
-                  match={m}
-                  teamNames={teamNames}
-                  participantId={participant.id}
-                  existing={myPredictions.get(m.id) ?? null}
-                />
-              ))}
-            </div>
-          </section>
-        );
-      })}
+      <div className="flex flex-col gap-4">
+        <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
+
+        {filteredMatches.length === 0 && (
+          <p className="card p-4 text-sm text-neutral-500">No matches found for this filter.</p>
+        )}
+
+        {ROUND_ORDER.map((round) => {
+          const roundMatches = grouped.get(round) ?? [];
+          if (roundMatches.length === 0) return null;
+          return (
+            <section key={round}>
+              <h2 className="mb-3 text-lg font-bold">
+                {round} <span className="font-normal text-neutral-400">({roundMatches.length})</span>
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {roundMatches.map((m) =>
+                  round !== "Group Stage" && !teamsConfirmed(m) ? (
+                    <LockedPredictionCard key={m.id} match={m} />
+                  ) : (
+                    <MatchPredictionCard
+                      key={m.id}
+                      match={m}
+                      teamNames={teamNames}
+                      participantId={participant.id}
+                      existing={myPredictions.get(m.id) ?? null}
+                    />
+                  )
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

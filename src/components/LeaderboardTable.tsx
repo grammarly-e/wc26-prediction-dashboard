@@ -12,7 +12,7 @@
 // here never needs another round trip, and never risks showing a pick early.
 // ============================================================================
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
 import type { Match, MatchPrediction } from "@/lib/types";
@@ -79,6 +79,24 @@ const PICK_RESULT_LABELS: Record<PickResult, string> = {
 
 export default function LeaderboardTable({ rows, currentParticipantId, breakdowns, matches, teamNames }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Track rank movement since the last page load via localStorage.
+  // On mount: read the ranks from the previous visit (for the delta display),
+  // then immediately write current ranks so the *next* load has a baseline.
+  const [prevRanks, setPrevRanks] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("wc2026_leaderboard_ranks");
+      if (stored) setPrevRanks(JSON.parse(stored) as Record<string, number>);
+    } catch {
+      // localStorage unavailable or stale JSON — silently ignore
+    }
+    const current: Record<string, number> = {};
+    for (const row of rows) current[row.participant_id] = row.rank;
+    try {
+      localStorage.setItem("wc2026_leaderboard_ranks", JSON.stringify(current));
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount only
 
   return (
     <div className="card overflow-hidden">
@@ -94,7 +112,6 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
             <th className="px-4 py-3 text-right font-semibold" title="Match-prediction points scored in the knockout rounds">
               Knockout
             </th>
-            <th className="px-4 py-3 text-right font-semibold">Award pts</th>
             <th className="px-4 py-3 text-right font-semibold">Exact calls</th>
           </tr>
         </thead>
@@ -112,7 +129,27 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                   onClick={() => setExpanded(isOpen ? null : row.participant_id)}
                   aria-expanded={isOpen}
                 >
-                  <td className="px-4 py-3 font-mono text-neutral-500">{MEDALS[row.rank] ?? row.rank}</td>
+                  <td className="px-4 py-3 font-mono text-neutral-500">
+                    <span className="inline-flex items-center gap-1.5">
+                      {MEDALS[row.rank] ?? row.rank}
+                      {(() => {
+                        const prev = prevRanks[row.participant_id];
+                        if (prev === undefined) {
+                          // New entrant — only show "NEW" if we have a baseline from last visit
+                          return Object.keys(prevRanks).length > 0 ? (
+                            <span className="text-[10px] font-semibold text-sky-500">NEW</span>
+                          ) : null;
+                        }
+                        const delta = prev - row.rank; // positive = moved up
+                        if (delta === 0) return null;
+                        return (
+                          <span className={`text-[10px] font-semibold ${delta > 0 ? "text-emerald-500" : "text-red-400"}`}>
+                            {delta > 0 ? `↑${delta}` : `↓${Math.abs(delta)}`}
+                          </span>
+                        );
+                      })()}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 font-medium">
                     <span className="inline-flex items-center gap-2">
                       <span aria-hidden="true" className="text-xs text-neutral-400">
@@ -125,12 +162,11 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                   <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{row.total_points}</td>
                   <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.group_stage_points}</td>
                   <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.knockout_points}</td>
-                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.tournament_points}</td>
                   <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.exact_score_hits}</td>
                 </tr>
                 {isOpen && (
                   <tr className="border-b border-neutral-100 last:border-0">
-                    <td colSpan={7} className="bg-neutral-50/60 px-4 py-3">
+                    <td colSpan={6} className="bg-neutral-50/60 px-4 py-3">
                       <PredictionBreakdown
                         displayName={row.display_name}
                         picks={picks}

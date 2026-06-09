@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "tsx scripts/seed.ts",
-    "sync": "tsx scripts/sync-live-data.ts"
+    "sync": "tsx scripts/sync-live-data.ts",
+    "seed:test": "tsx scripts/seed-test-data.ts",
+    "clear:test": "tsx scripts/clear-test-data.ts",
+    "dev:test": "tsx scripts/dev-test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
