@@ -25,6 +25,11 @@ interface Props {
   breakdowns: Map<string, MatchPrediction[]>;
   matches: Map<string, Match>;
   teamNames: Map<string, string>;
+  /**
+   * When the actual top 3 is known: participant_id -> count of their
+   * favourite picks that hit. Omit before the Final is played.
+   */
+  favouriteHits?: Record<string, number>;
 }
 
 function tierBadgeClass(points: number): string {
@@ -57,7 +62,7 @@ const PICK_RESULT_LABELS: Record<PickResult, string> = {
   pending: "Awaiting kickoff",
 };
 
-export default function LeaderboardTable({ rows, currentParticipantId, breakdowns, matches, teamNames }: Props) {
+export default function LeaderboardTable({ rows, currentParticipantId, breakdowns, matches, teamNames, favouriteHits }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [prevRanks, setPrevRanks] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -89,6 +94,7 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
             const isMe = currentParticipantId === row.participant_id;
             const isOpen = expanded === row.participant_id;
             const picks = breakdowns.get(row.participant_id) ?? [];
+            const favHits = favouriteHits?.[row.participant_id] ?? 0;
             return (
               <Fragment key={row.participant_id}>
                 <tr
@@ -117,12 +123,17 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                     </span>
                   </td>
                   <td className="px-4 py-3 font-medium">
-                    <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
                       <span aria-hidden="true" className="text-xs text-neutral-400">
                         {isOpen ? "▾" : "▸"}
                       </span>
                       {row.display_name}
                       {isMe && <span className="badge bg-pitch text-gold">You</span>}
+                      {favHits > 0 && (
+                        <span className="badge bg-emerald-100 text-emerald-700 text-[10px]">
+                          {favHits}/3 favs in top 3
+                        </span>
+                      )}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{row.total_points}</td>
@@ -170,7 +181,7 @@ function PredictionBreakdown({
   if (visible.length === 0) {
     return (
       <p className="text-xs text-neutral-500">
-        No picks from {displayName} are visible yet — others&rsquo; predictions for a match only become
+        No picks from {displayName} are visible yet -- others&rsquo; predictions for a match only become
         visible once that match has kicked off.
       </p>
     );
@@ -223,10 +234,10 @@ function PredictionBreakdown({
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
                 <span className="font-mono font-semibold tabular-nums text-neutral-900">
-                  {pick.predicted_home}–{pick.predicted_away}
+                  {pick.predicted_home}--{pick.predicted_away}
                   {hasResult && (
                     <span className="ml-1.5 text-neutral-400">
-                      (final {match.home_score}–{match.away_score})
+                      (final {match.home_score}--{match.away_score})
                     </span>
                   )}
                 </span>

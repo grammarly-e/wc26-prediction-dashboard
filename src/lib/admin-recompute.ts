@@ -1,23 +1,24 @@
 // ============================================================================
-// Shared recompute logic — imported by both:
-//   • POST /api/admin/recompute  (explicit "Recompute All" button)
-//   • POST /api/admin/update-match  (auto-recompute on every admin save)
+// Shared recompute logic -- imported by both:
+//   * POST /api/admin/recompute  (explicit "Recompute All" button)
+//   * POST /api/admin/update-match  (auto-recompute on every admin save)
 //
 // recomputeAll(supabase)
-//   ① Patches team.group_letter for any team whose group is null (sync artifact)
-//   ② Rescores predictions for every finished match
-//   ③ Recomputes group standings from match results
-//   ④ Resolves knockout bracket slot codes (1X/2X/3X/WN/LN)
+//   (0) Normalises team names (e.g. Turkiye -> Turkey, USA -> United States of America)
+//   (1) Patches team.group_letter for any team whose group is null (sync artifact)
+//   (2) Rescores predictions for every finished match
+//   (3) Recomputes group standings from match results
+//   (4) Resolves knockout bracket slot codes (1X/2X/3X/WN/LN)
 //
 // recomputeStandingsAndBracket(supabase)
-//   Same as above but skips step ②. Used by update-match after it has
+//   Same as above but skips step (2). Used by update-match after it has
 //   already scored the single updated match inline.
 // ============================================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { scoreMatchPrediction } from "./scoring";
 
-// ── Internal types ────────────────────────────────────────────────────────────
+// -- Internal types -----------------------------------------------------------
 
 interface DbMatch {
   id: string;
@@ -60,13 +61,55 @@ interface ThirdEntry {
   goals_for: number;
 }
 
-// ── Step 0: Patch missing team group_letters ──────────────────────────────────
+// -- Step 0a: Normalize team names --------------------------------------------
+//
+// Live-data sync sometimes creates records with API name variants that differ
+// from our canonical names. This patches those rows so the standings and UI
+// always use the names the admin configured.
+// Idempotent -- only runs UPDATE when a matching variant exists.
+
+const TEAM_NAME_ALIASES: Record<string, string> = {
+  // Turkey
+  "Turkiye": "Turkey",
+  "Türkiye": "Turkey",
+  // Bosnia and Herzegovina
+  "Bosnia & Herzegovina": "Bosnia and Herzegovina",
+  "Bosnia-Herzegovina": "Bosnia and Herzegovina",
+  // United States of America
+  "United States": "United States of America",
+  "USA": "United States of America",
+  // DR Congo
+  "Congo DR": "DR Congo",
+  "Democratic Republic of Congo": "DR Congo",
+  "Democratic Republic of the Congo": "DR Congo",
+  // Other common variants
+  "Ivory Coast": "Ivory Coast",
+  "Cote d'Ivoire": "Ivory Coast",
+  "Cote dIvoire": "Ivory Coast",
+  "Czech Republic": "Czechia",
+  "Republic of Korea": "South Korea",
+};
+
+async function patchTeamNames(supabase: SupabaseClient): Promise<number> {
+  let patched = 0;
+  for (const [variant, canonical] of Object.entries(TEAM_NAME_ALIASES)) {
+    if (variant === canonical) continue;
+    const { error } = await supabase
+      .from("teams")
+      .update({ name: canonical })
+      .eq("name", variant);
+    if (!error) patched++;
+  }
+  return patched;
+}
+
+// -- Step 0b: Patch missing team group_letters --------------------------------
 //
 // When the live-data sync creates team records from the API, it sometimes
 // uses a different name variant than what was seeded (e.g. "Turkey" vs
-// "Türkiye"), resulting in a new team row with group_letter = NULL. This
+// "Turkiye"), resulting in a new team row with group_letter = NULL. This
 // function infers the correct group from match data and patches those rows.
-// Idempotent — only updates rows where group_letter IS NULL.
+// Idempotent -- only updates rows where group_letter IS NULL.
 
 async function patchTeamGroupLetters(
   supabase: SupabaseClient,
@@ -96,7 +139,7 @@ async function patchTeamGroupLetters(
   return patched;
 }
 
-// ── Step 1: Rescore all finished match predictions ────────────────────────────
+// -- Step 1: Rescore all finished match predictions ---------------------------
 
 async function rescoreAllFinishedMatches(
   supabase: SupabaseClient,
@@ -132,7 +175,7 @@ async function rescoreAllFinishedMatches(
   return rescored;
 }
 
-// ── Step 2: Compute group standings ──────────────────────────────────────────
+// -- Step 2: Compute group standings ------------------------------------------
 
 export function computeStandings(
   teams: DbTeam[],
@@ -155,9 +198,8 @@ export function computeStandings(
     statsMap.get(g)!.set(t.id, zeroStats(t.id));
   }
 
-  // Also seed groups directly from match data — this catches teams whose
-  // group_letter is NULL in the teams table (e.g. API-synced duplicates with
-  // a different name variant than the original seeded record).
+  // Also seed groups directly from match data -- catches teams whose
+  // group_letter is NULL in the teams table (e.g. API-synced duplicates).
   for (const m of matches) {
     if (m.round !== "Group Stage" || !m.group_letter || !m.team1_id || !m.team2_id) continue;
     const g = m.group_letter;
@@ -218,13 +260,13 @@ export function computeStandings(
   return result;
 }
 
-// ── Step 3: Upsert standings rows ─────────────────────────────────────────────
+// -- Step 3: Upsert standings rows --------------------------------------------
 
 async function upsertStandings(
   supabase: SupabaseClient,
   standings: Map<string, TeamStats[]>
 ): Promise<void> {
-  // Reset all rows to 0 first — clears stale data when a result is removed
+  // Reset all rows to 0 first -- clears stale data when a result is removed
   await supabase.from("standings").update({
     played: 0, won: 0, drawn: 0, lost: 0,
     goals_for: 0, goals_against: 0, goal_diff: 0, points: 0, rank: null,
@@ -245,14 +287,13 @@ async function upsertStandings(
     }
   }
   if (rows.length > 0) {
-    // upsert creates rows that don't exist yet (pre-tournament) and updates existing ones
     await supabase
       .from("standings")
       .upsert(rows, { onConflict: "group_letter,team_id" });
   }
 }
 
-// ── Step 4: Resolve knockout slot codes ───────────────────────────────────────
+// -- Step 4: Resolve knockout slot codes --------------------------------------
 
 function resolveSlotCode(
   code: string,
@@ -358,9 +399,12 @@ async function resolveKnockoutSlots(
   return updated;
 }
 
-// ── Helper: fetch matches + patch + re-fetch teams ────────────────────────────
+// -- Helper: patch names + fetch matches + patch group letters + re-fetch teams
 
 async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: DbMatch[]; teams: DbTeam[] }> {
+  // Normalize name variants first (e.g. "Turkiye" -> "Turkey").
+  await patchTeamNames(supabase);
+
   const { data: matchData, error: matchErr } = await supabase
     .from("matches")
     .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status")
@@ -381,7 +425,7 @@ async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: D
   return { matches, teams: teamData as DbTeam[] };
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// -- Public API ---------------------------------------------------------------
 
 export interface RecomputeResult {
   predictionsRescored: number;
@@ -389,7 +433,7 @@ export interface RecomputeResult {
   slotsUpdated: number;
 }
 
-/** Full recompute: patches team groups + rescores all predictions + standings + bracket. */
+/** Full recompute: normalises names + patches team groups + rescores all predictions + standings + bracket. */
 export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeResult> {
   const { matches, teams } = await fetchAndPatchData(supabase);
 
@@ -405,7 +449,7 @@ export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeR
 }
 
 /**
- * Standings + bracket recompute only — skips rescoring predictions.
+ * Standings + bracket recompute only -- skips rescoring predictions.
  * Call this after update-match has already scored the specific match inline.
  */
 export async function recomputeStandingsAndBracket(
