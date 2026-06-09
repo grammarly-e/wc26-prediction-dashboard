@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { adminTokenHash } from "@/lib/admin-auth";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { scoreMatchPrediction } from "@/lib/scoring";
+import { recomputeStandingsAndBracket } from "@/lib/admin-recompute";
 import type { MatchStatus } from "@/lib/types";
 
 function isAuthenticated(): boolean {
@@ -38,8 +39,8 @@ export async function POST(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // 2. If the match is now finished with a real score, score all predictions
-  //    for it immediately — don't wait for the API sync (which would overwrite
-  //    manually-entered scores anyway).
+  //    for it immediately. Then recompute standings + bracket so the UI
+  //    reflects the new result without a manual "Recompute" click.
   if (body.status === "finished" && body.homeScore != null && body.awayScore != null) {
     const { data: predictions, error: predErr } = await supabase
       .from("match_predictions")
@@ -60,6 +61,10 @@ export async function POST(request: Request) {
           .eq("id", p.id);
       }
     }
+
+    // Recompute standings + bracket in the background (don't await to keep
+    // the response fast — the client refreshes the page anyway).
+    recomputeStandingsAndBracket(supabase).catch(() => {/* silent — admin can click Recompute manually */});
   }
 
   return NextResponse.json({ ok: true });

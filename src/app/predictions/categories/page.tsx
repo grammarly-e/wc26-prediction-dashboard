@@ -9,17 +9,18 @@ import type { PredictionCategory } from "@/lib/types";
 export const revalidate = 0;
 
 // ----------------------------------------------------------------------------
-// "My 3 Favourite Teams" framing.
+// Favourite Teams + Tournament Awards
 //
-// The underlying DB categories (champion / runner_up / third_place) and their
-// scoring rules are unchanged — they still award points if a team wins / comes
-// second / comes third. The framing change is purely presentational: instead
-// of asking "who will WIN the tournament?" we ask "which 3 teams are you
-// rooting for?" This is friendlier for casual participants and still rewards
-// correct calls.
+// Group winner and bracket qualifier predictions have been removed — those
+// outcomes are already determined by match results. This page now shows only:
 //
-// The key→label override happens here (server-side) before the cards render,
-// so CategoryPredictionCard stays unmodified and the DB schema is untouched.
+//   "My 3 Favourite Teams" — champion/runner_up/third_place keys, reframed
+//   as casual "who are you rooting for" rather than scored predictions.
+//
+//   "Tournament Awards" — Golden Boot, Golden Ball, Best Young Player.
+//
+// Neither section affects the leaderboard ranking (points_value = 0 for all
+// categories). They are purely fun picks.
 // ----------------------------------------------------------------------------
 
 const FAVOURITE_KEYS = new Set(["champion", "runner_up", "third_place"]);
@@ -29,40 +30,29 @@ const FAVOURITE_LABELS: Record<string, string> = {
   third_place: "Favourite Team #3",
 };
 
+const AWARD_KEYS = new Set(["golden_boot", "golden_ball", "best_young_player"]);
+
 function groupCategories(categories: PredictionCategory[]) {
   const groups: Record<string, PredictionCategory[]> = {
     "My 3 Favourite Teams": [],
     "Tournament Awards": [],
-    "Group Winners": [],
-    "Knockout Bracket": [],
-    "Other categories": [],
   };
   for (const c of categories) {
     if (FAVOURITE_KEYS.has(c.key)) {
-      // Override the label to the casual "Favourite Team" framing before passing to the card.
       groups["My 3 Favourite Teams"].push({ ...c, label: FAVOURITE_LABELS[c.key] ?? c.label });
-    } else if (c.group_letter) {
-      groups["Group Winners"].push(c);
-    } else if (c.key.startsWith("quarterfinalist") || c.key.startsWith("semifinalist")) {
-      groups["Knockout Bracket"].push(c);
-    } else if (["golden_boot", "golden_ball", "best_young_player"].includes(c.key)) {
+    } else if (AWARD_KEYS.has(c.key)) {
       groups["Tournament Awards"].push(c);
-    } else {
-      groups["Other categories"].push(c);
     }
+    // Group Winners and Knockout Bracket categories are intentionally excluded.
   }
   return groups;
 }
 
 const GROUP_DESCRIPTIONS: Record<string, string> = {
   "My 3 Favourite Teams":
-    "Pick the 3 teams you're rooting for. Points if they go all the way — higher picks earn more.",
+    "Pick the 3 teams you're rooting for — just for fun, no points on the line.",
   "Tournament Awards":
-    "Call the Golden Boot, Golden Ball, and Best Young Player. Each locks at tournament kickoff.",
-  "Group Winners":
-    "Which team tops each group? Locks at tournament kickoff so you're guessing blind.",
-  "Knockout Bracket":
-    "Who reaches the quarters and semis? Locks once the Round of 32 draw is confirmed.",
+    "Call the Golden Boot, Golden Ball, and Best Young Player. Just for bragging rights.",
 };
 
 export default async function CategoryPredictionsPage() {
@@ -74,8 +64,7 @@ export default async function CategoryPredictionsPage() {
         <div>
           <h1 className="text-2xl font-bold">Favourites + Awards</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Pick your 3 favourite teams, call the Golden Boot winner, predict group winners, and more.
-            Join to lock in your picks before the tournament kicks off.
+            Pick your 3 favourite teams and call the Golden Boot winner. Join to lock in your picks.
           </p>
         </div>
         <JoinForm />
@@ -90,51 +79,48 @@ export default async function CategoryPredictionsPage() {
     getMyTournamentPredictions(participant.id),
   ]);
   const grouped = groupCategories(categories);
-  const submittedCount = myPicks.size;
+  const displayGroups = (Object.entries(grouped) as [string, PredictionCategory[]][]).filter(
+    ([, cats]) => cats.length > 0
+  );
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Favourites + Awards</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Signed in as <span className="font-semibold text-neutral-700">{participant.display_name}</span> ·{" "}
-            {submittedCount} of {categories.length} picks submitted. Each category locks at the time shown.
+          <p className="mt-1 max-w-2xl text-sm text-neutral-500">
+            These picks are just for fun — they don't affect your leaderboard score. The ranking is
+            based entirely on match predictions.
           </p>
         </div>
-        <Link href="/predictions" className="badge shrink-0 bg-pitch text-gold hover:opacity-90">
-          ← Match-by-match picks
+        <Link
+          href="/predictions"
+          className="shrink-0 rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold hover:opacity-90"
+        >
+          Match picks →
         </Link>
       </div>
 
-      {Object.entries(grouped).map(([groupName, groupCategories]) => {
-        if (groupCategories.length === 0) return null;
-        const description = GROUP_DESCRIPTIONS[groupName];
-        return (
-          <section key={groupName}>
-            <div className="mb-3">
-              <h2 className="text-lg font-bold">
-                {groupName} <span className="font-normal text-neutral-400">({groupCategories.length})</span>
-              </h2>
-              {description && (
-                <p className="mt-0.5 text-sm text-neutral-500">{description}</p>
-              )}
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {groupCategories.map((c) => (
-                <CategoryPredictionCard
-                  key={c.key}
-                  category={c}
-                  teams={teams}
-                  teamNames={teamNames}
-                  participantId={participant.id}
-                  existing={myPicks.get(c.key) ?? null}
-                />
-              ))}
-            </div>
-          </section>
-        );
-      })}
+      {displayGroups.map(([groupName, cats]) => (
+        <section key={groupName}>
+          <h2 className="mb-1 font-semibold text-neutral-700">{groupName}</h2>
+          {GROUP_DESCRIPTIONS[groupName] && (
+            <p className="mb-4 text-sm text-neutral-500">{GROUP_DESCRIPTIONS[groupName]}</p>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {cats.map((category) => (
+              <CategoryPredictionCard
+                key={category.key}
+                category={category}
+                teams={teams}
+                teamNames={teamNames}
+                existing={myPicks.get(category.key) ?? null}
+                participantId={participant.id}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

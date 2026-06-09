@@ -12,7 +12,7 @@
 // and every page below should call it before deciding what to render.
 // ============================================================================
 
-import { createServerSupabaseClient } from "./supabase/server";
+import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import type {
   LeaderboardRow,
   Match,
@@ -23,30 +23,19 @@ import type {
   TournamentPrediction,
 } from "./types";
 
-/**
- * The signed-in participant viewing this request, or null if nobody's signed
- * in yet (no session) or they have a session but haven't picked a display
- * name yet (no `participants` row — see JoinForm).
- */
 export async function getCurrentParticipant(): Promise<Participant | null> {
   const supabase = createServerSupabaseClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
-
   const { data, error } = await supabase
     .from("participants")
     .select("*")
     .eq("auth_user_id", user.id)
     .maybeSingle();
   if (error) throw error;
-
   return (data as Participant | null) ?? null;
 }
 
-/** All 22 award categories, in display order — used to render the category-pick page. */
 export async function getPredictionCategories(): Promise<PredictionCategory[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -57,7 +46,6 @@ export async function getPredictionCategories(): Promise<PredictionCategory[]> {
   return data as PredictionCategory[];
 }
 
-/** This participant's match-by-match predictions, keyed by match_id for quick lookup in the UI. */
 export async function getMyMatchPredictions(participantId: string): Promise<Map<string, MatchPrediction>> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -65,11 +53,9 @@ export async function getMyMatchPredictions(participantId: string): Promise<Map<
     .select("*")
     .eq("participant_id", participantId);
   if (error) throw error;
-
   return new Map((data as MatchPrediction[]).map((p) => [p.match_id, p]));
 }
 
-/** This participant's tournament-long category picks, keyed by category_key. */
 export async function getMyTournamentPredictions(
   participantId: string
 ): Promise<Map<string, TournamentPrediction>> {
@@ -79,11 +65,9 @@ export async function getMyTournamentPredictions(
     .select("*")
     .eq("participant_id", participantId);
   if (error) throw error;
-
   return new Map((data as TournamentPrediction[]).map((p) => [p.category_key, p]));
 }
 
-/** The full standings table — public view, safe for anyone to read. */
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -96,18 +80,6 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
 
 // ============================================================================
 // Stage-split leaderboard
-//
-// The `leaderboard` view sums match points across the whole tournament — but
-// the group stage (Matchdays 1–17, matches #1–72) and the knockout rounds
-// (Round of 32 through the Final, #73–104) are different games of skill: one
-// rewards reading 12 separate group dynamics, the other rewards calling
-// single-elimination upsets. Splitting them surfaces a "group stage champion"
-// and a "knockout stage champion" alongside the overall leaderboard.
-//
-// There's no view for this in the schema, so it's computed here by reading
-// scored predictions (points_awarded is only ever set once a match has
-// finished — i.e. after kickoff, which is exactly when RLS opens up everyone's
-// picks for that match — so this aggregate is always complete, never partial).
 // ============================================================================
 
 export interface StageLeaderboardRow {
@@ -123,16 +95,11 @@ function isKnockoutRound(round: Match["round"]): boolean {
   return round !== "Group Stage";
 }
 
-/**
- * Per-participant match points, split into group-stage vs. knockout-stage
- * totals, each sorted descending (so index 0 is that stage's leader).
- */
 export async function getStageLeaderboards(): Promise<{
   groupStage: StageLeaderboardRow[];
   knockout: StageLeaderboardRow[];
 }> {
   const supabase = createServerSupabaseClient();
-
   const [predictionsRes, participantsRes] = await Promise.all([
     supabase
       .from("match_predictions")
@@ -164,12 +131,6 @@ export async function getStageLeaderboards(): Promise<{
     return row;
   }
 
-  // Supabase's untyped client infers embedded-resource selects (`matches(round)`)
-  // as an array (`{ round }[]`) because it can't read the FK cardinality off
-  // generated schema types. At runtime, match_predictions.match_id -> matches.id
-  // is many-to-one, so postgrest actually returns a single object (or null) here
-  // — hence the indirection through `unknown` rather than a direct `as`, which
-  // TS correctly refuses (array and object shapes aren't comparable).
   for (const pred of predictionsRes.data as unknown as Array<{
     participant_id: string;
     points_awarded: number | null;
@@ -194,18 +155,7 @@ export async function getStageLeaderboards(): Promise<{
 }
 
 // ============================================================================
-// Match insights — "how did the crowd do on this one?"
-//
-// Same RLS-completeness trick as getStageLeaderboards: points_awarded (and
-// therefore score_breakdown) is only ever set once a match has finished, and
-// finished-match predictions are visible to everyone — so summing correct/
-// incorrect calls per match is always a complete picture, never a partial
-// peek at picks that haven't locked yet.
-//
-// The matches page uses this to call out the "Biggest Upset" (the finished
-// match where the crowd was most often wrong about the result) and "Best
-// Read" (the one most people called correctly) — a bit of fun texture on
-// what would otherwise be a plain schedule grid.
+// Match insights
 // ============================================================================
 
 export interface MatchInsight {
@@ -213,11 +163,9 @@ export interface MatchInsight {
   total_predictions: number;
   correct_outcome_count: number;
   exact_score_count: number;
-  /** Share of scored predictions that called the right W/D/L outcome, 0–1. */
   correct_outcome_rate: number;
 }
 
-/** Per-match aggregate of how participants' scored predictions landed, keyed by match_id. */
 export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -250,18 +198,9 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
 }
 
 // ============================================================================
-// "Compare picks" — every match prediction the current viewer is allowed to
-// see, grouped by the participant who made it.
-//
-// RLS (supabase/migrations/0002_*) does the filtering for us: this returns
-// the viewer's own picks regardless of timing, plus everyone else's picks
-// only for matches that have already kicked off. That's exactly the right
-// shape for a "click a name to see their breakdown" feature — nobody can
-// preview a pick before the match locks, but once it has, comparisons are
-// fair game.
+// Leaderboard breakdown — predictions visible to the current viewer
 // ============================================================================
 
-/** Every visible match prediction, grouped by participant_id. */
 export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<string, MatchPrediction[]>> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase.from("match_predictions").select("*");
@@ -274,4 +213,77 @@ export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<str
     byParticipant.set(row.participant_id, list);
   }
   return byParticipant;
+}
+
+// ============================================================================
+// Public participants view — ALL predictions visible to everyone
+// ============================================================================
+
+export async function getParticipantMatchPredictions(
+  participantId: string
+): Promise<MatchPrediction[]> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("match_predictions")
+    .select("*")
+    .eq("participant_id", participantId)
+    .order("match_id");
+  if (error) throw error;
+  return data as MatchPrediction[];
+}
+
+export async function getParticipantById(
+  participantId: string
+): Promise<Participant | null> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("participants")
+    .select("*")
+    .eq("id", participantId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Participant | null) ?? null;
+}
+
+// ============================================================================
+// Award accuracy — all participants' tournament picks, for the leaderboard
+// accuracy display. Informational only (no points shown).
+// ============================================================================
+
+export interface AwardPickRow {
+  participant_id: string;
+  display_name: string;
+  predicted_team_id: string | null;
+  predicted_player_id: string | null;
+  predicted_player_name: string | null;
+  points_awarded: number | null;
+}
+
+export async function getAwardPicks(categoryKey: string): Promise<AwardPickRow[]> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("tournament_predictions")
+    .select("participant_id, predicted_team_id, predicted_player_id, predicted_player_name, points_awarded, participants(display_name)")
+    .eq("category_key", categoryKey);
+  if (error) throw error;
+
+  return (
+    data as Array<{
+      participant_id: string;
+      predicted_team_id: string | null;
+      predicted_player_id: string | null;
+      predicted_player_name: string | null;
+      points_awarded: number | null;
+      participants: { display_name: string } | null;
+    }>
+  )
+    .map((row) => ({
+      participant_id: row.participant_id,
+      display_name: row.participants?.display_name ?? "Unknown",
+      predicted_team_id: row.predicted_team_id,
+      predicted_player_id: row.predicted_player_id,
+      predicted_player_name: row.predicted_player_name,
+      points_awarded: row.points_awarded,
+    }))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name));
 }

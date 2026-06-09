@@ -130,7 +130,7 @@ export default function CategoryPredictionCard({ category, teams, participantId,
           <h3 className="font-semibold">{category.label}</h3>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-500">
             <span>
-              Worth {category.points_value} pts · locks {formatLockTime(category.locks_at)}
+              locks {formatLockTime(category.locks_at)}
             </span>
             {countdown && <span className="badge bg-pitch/10 text-pitch">{countdown}</span>}
           </p>

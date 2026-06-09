@@ -6,7 +6,9 @@ import {
   getLeaderboard,
   getStageLeaderboards,
   getVisibleMatchPredictionsByParticipant,
+  getAwardPicks,
   type StageLeaderboardRow,
+  type AwardPickRow,
 } from "@/lib/predictions";
 import LeaderboardTable, { type LeaderboardTableRow } from "@/components/LeaderboardTable";
 
@@ -22,30 +24,6 @@ function formatSyncedAt(iso: string | null): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-// ----------------------------------------------------------------------------
-// Award-pick accuracy — "who called the Champion / Golden Boot best?"
-//
-// Deliberately a placeholder for now: tournament_predictions.points_awarded
-// is never written (scoreTournamentPrediction exists in scoring.ts but no
-// resolution job calls it), and these categories genuinely can't resolve
-// until their real-world outcome is known — Champion only once the Final
-// final whistle blows, Golden Boot shortly after as scoring gets confirmed.
-// Building "live tracking" here would mean guessing at outcomes mid-tournament,
-// which is exactly the kind of fragile gimmick worth avoiding. Shipping the
-// section now (clearly marked pending) sets user expectations correctly and
-// means the real ranking can slot in here later with no layout change.
-// ----------------------------------------------------------------------------
-
-function AwardAccuracyCard({ label, description }: { label: string; description: string }) {
-  return (
-    <div className="card flex flex-col gap-1 p-4">
-      <p className="text-xs uppercase tracking-wide text-neutral-400">{label}</p>
-      <p className="text-lg font-bold text-neutral-400">Not decided yet</p>
-      <p className="text-xs text-neutral-500">{description}</p>
-    </div>
-  );
 }
 
 function StageLeaderCard({
@@ -81,16 +59,77 @@ function StageLeaderCard({
   );
 }
 
+// ── Award Accuracy Card ───────────────────────────────────────────────────────
+
+const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
+  { key: "champion",          label: "Champion" },
+  { key: "runner_up",         label: "Runner-up" },
+  { key: "third_place",       label: "3rd Place" },
+  { key: "golden_boot",       label: "Golden Boot" },
+  { key: "golden_ball",       label: "Golden Ball" },
+  { key: "best_young_player", label: "Best Young Player" },
+];
+
+function AwardAccuracyCard({
+  label,
+  picks,
+  teamNames,
+}: {
+  label: string;
+  picks: AwardPickRow[];
+  teamNames: Map<string, string>;
+}) {
+  const anyScored = picks.some((p) => p.points_awarded !== null);
+
+  return (
+    <div className="card flex flex-col gap-2 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
+      {picks.length === 0 ? (
+        <p className="text-xs text-neutral-400">No picks yet</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {picks.map((pick) => {
+            const name = pick.predicted_team_id
+              ? (teamNames.get(pick.predicted_team_id) ?? "Unknown team")
+              : (pick.predicted_player_name ?? "—");
+            const scored = pick.points_awarded !== null;
+            const correct = scored && (pick.points_awarded ?? 0) > 0;
+            return (
+              <li key={pick.participant_id} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-neutral-600">{pick.display_name}</span>
+                <span className={`font-medium ${
+                  !anyScored  ? "text-neutral-500" :
+                  correct     ? "text-emerald-600" :
+                  scored      ? "text-red-400"     :
+                                "text-neutral-400"
+                }`}>
+                  {name}
+                  {anyScored && correct && " ✓"}
+                  {anyScored && scored && !correct && " ✗"}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames] = await Promise.all([
-    getLeaderboard(),
-    getCurrentParticipant(),
-    getLastSyncedAt(),
-    getStageLeaderboards(),
-    getVisibleMatchPredictionsByParticipant(),
-    getMatches(),
-    getTeamNameMap(),
-  ]);
+  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, ...awardPicksArrays] =
+    await Promise.all([
+      getLeaderboard(),
+      getCurrentParticipant(),
+      getLastSyncedAt(),
+      getStageLeaderboards(),
+      getVisibleMatchPredictionsByParticipant(),
+      getMatches(),
+      getTeamNameMap(),
+      ...AWARD_CATEGORIES.map((c) => getAwardPicks(c.key)),
+    ]);
   const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
 
   const matchById = new Map(matches.map((m) => [m.id, m]));
@@ -119,23 +158,15 @@ export default async function LeaderboardPage() {
   const groupMatchesScored = stageLeaderboards.groupStage.reduce((sum, r) => sum + r.group_stage_matches_scored, 0);
   const knockoutMatchesScored = stageLeaderboards.knockout.reduce((sum, r) => sum + r.knockout_matches_scored, 0);
 
-  // Match #104 is the Final — its kickoff date is the natural "this resolves
-  // around..." anchor for the award-pick placeholder cards below.
-  const finalMatch = matches.find((m) => m.match_number === 104) ?? null;
-  const finalDateLabel = finalMatch
-    ? new Date(finalMatch.kickoff_at).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
-    : "the Final";
-
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Ranked by match prediction points, with exact-scoreline calls as the tiebreaker. Tournament
-            award picks are scored separately and don&rsquo;t affect this ranking. Click a participant to see
-            their match-by-match breakdown — picks for matches that haven&rsquo;t kicked off yet stay hidden
-            for everyone. Updates automatically as results come in.
+            Ranked by match prediction points. 3 pts for correct result and goal difference, 1 pt for
+            correct result only. Best calls (3-pt predictions) break ties. Click a participant to see
+            their match-by-match breakdown.
           </p>
         </div>
         <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
@@ -160,24 +191,6 @@ export default async function LeaderboardPage() {
         />
       </div>
 
-      <div>
-        <h2 className="mb-1 text-sm font-semibold text-neutral-700">Award pick accuracy</h2>
-        <p className="mb-3 text-xs text-neutral-500">
-          Who called the Champion and Golden Boot best? These can&rsquo;t be scored until the real outcomes are known —
-          rankings will appear here once they&rsquo;re decided.
-        </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <AwardAccuracyCard
-            label="Champion pick"
-            description={`Resolves once the Champion is crowned — expected after the Final on ${finalDateLabel}.`}
-          />
-          <AwardAccuracyCard
-            label="Golden Boot pick"
-            description={`Resolves once the tournament's top scorer is confirmed, shortly after the Final on ${finalDateLabel}.`}
-          />
-        </div>
-      </div>
-
       {myRow && (
         <div className="card flex flex-wrap items-center gap-x-8 gap-y-2 bg-pitch p-4 text-gold">
           <div>
@@ -191,7 +204,7 @@ export default async function LeaderboardPage() {
             <p className="text-lg font-bold tabular-nums">{myRow.match_points}</p>
           </div>
           <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Exact calls</p>
+            <p className="text-xs uppercase tracking-wide text-gold/70">Best calls</p>
             <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
           </div>
           <Link href="/predictions" className="ml-auto text-xs font-semibold underline-offset-2 hover:underline">
@@ -217,6 +230,26 @@ export default async function LeaderboardPage() {
           teamNames={teamNames}
         />
       )}
+
+      {/* Award picks — informational only, no points */}
+      <section>
+        <div className="mb-3">
+          <h2 className="font-semibold">Favourites &amp; Awards picks</h2>
+          <p className="mt-0.5 text-xs text-neutral-500">
+            These don&rsquo;t affect standings — just for fun.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {AWARD_CATEGORIES.map((cat, i) => (
+            <AwardAccuracyCard
+              key={cat.key}
+              label={cat.label}
+              picks={awardPicksArrays[i] as AwardPickRow[]}
+              teamNames={teamNames}
+            />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

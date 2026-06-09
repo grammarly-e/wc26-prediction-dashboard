@@ -1,33 +1,23 @@
 // ============================================================================
 // Scoring system for match-by-match predictions.
 //
-// This is a TIERED system: a prediction earns the single highest tier it
-// qualifies for (tiers don't stack), plus one small additive "close call"
-// bonus for near-misses that don't qualify for any tier. This keeps the
-// incentives clean — there's no situation where guessing wildly accurate
-// totals beats genuinely reading the match correctly.
+// Two-tier system — a prediction earns the single highest tier it qualifies
+// for. Tiers don't stack.
 //
-//   Tier 1 — Exact scoreline                         25 pts
-//   Tier 2 — Correct result AND correct goal diff    15 pts
-//   Tier 3 — Correct result (W/D/L) only              8 pts
+//   Tier 2 — Correct result AND correct goal diff     3 pts
+//   Tier 1 — Correct result (W/D/L) only              1 pt
 //   Tier 0 — Wrong result                             0 pts
-//   Bonus  — "Close call": wrong result, but both     3 pts
-//            scorelines are within 1 goal each way
-//            (e.g. predicted 1-1, actual 2-1)
 //
-// Max per match: 25. A perfect group stage (72 matches) would be 1,800 pts
-// from match predictions alone — tournament-long picks (below) add more on
-// top, so the race stays open through the knockout rounds.
+// Note: an exact scoreline automatically satisfies "correct goal diff", so
+// a perfect prediction (e.g. predicted 2-1, final 2-1) scores 3 pts.
+// Max per match: 3.
 // ============================================================================
 
 import type { ScoreBreakdown } from "./types";
 
 export const SCORING = {
-  EXACT_SCORE: 25,
-  RESULT_AND_GOAL_DIFF: 15,
-  RESULT_ONLY: 8,
-  CLOSE_CALL_BONUS: 3,
-  CLOSE_CALL_MARGIN: 1, // each scoreline within ±1 goal of actual
+  RESULT_AND_GOAL_DIFF: 3,
+  RESULT_ONLY: 1,
 } as const;
 
 export type Outcome = "home_win" | "draw" | "away_win";
@@ -59,35 +49,28 @@ export interface MatchScoreResult {
 export function scoreMatchPrediction(input: MatchScoreInput): MatchScoreResult {
   const { predictedHome, predictedAway, actualHome, actualAway } = input;
 
-  const exact = predictedHome === actualHome && predictedAway === actualAway;
   const sameOutcome = outcomeOf(predictedHome, predictedAway) === outcomeOf(actualHome, actualAway);
   const sameGoalDiff = predictedHome - predictedAway === actualHome - actualAway;
-
-  const closeCall =
-    Math.abs(predictedHome - actualHome) <= SCORING.CLOSE_CALL_MARGIN &&
-    Math.abs(predictedAway - actualAway) <= SCORING.CLOSE_CALL_MARGIN;
+  // exact_score is retained in the breakdown for informational purposes only
+  const exactScore = predictedHome === actualHome && predictedAway === actualAway;
 
   let points = 0;
   const breakdown: ScoreBreakdown = {
-    exact_score: exact,
+    exact_score: exactScore,
     correct_outcome: sameOutcome,
-    correct_goal_difference: sameGoalDiff,
+    // Only flag goal diff as correct when the outcome is also correct — a
+    // flipped result with the same margin (e.g. 2-1 predicted, 1-2 actual)
+    // is a wrong call and scores 0 pts.
+    correct_goal_difference: sameOutcome && sameGoalDiff,
     close_approximation: false,
   };
 
-  if (exact) {
-    points = SCORING.EXACT_SCORE;
-    breakdown.points_exact = points;
-  } else if (sameOutcome && sameGoalDiff) {
-    points = SCORING.RESULT_AND_GOAL_DIFF;
+  if (sameOutcome && sameGoalDiff) {
+    points = SCORING.RESULT_AND_GOAL_DIFF; // 3 pts
     breakdown.points_goal_diff = points;
   } else if (sameOutcome) {
-    points = SCORING.RESULT_ONLY;
+    points = SCORING.RESULT_ONLY; // 1 pt
     breakdown.points_outcome = points;
-  } else if (closeCall) {
-    points = SCORING.CLOSE_CALL_BONUS;
-    breakdown.close_approximation = true;
-    breakdown.points_approximation = points;
   }
 
   breakdown.total = points;
