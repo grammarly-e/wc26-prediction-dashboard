@@ -12,28 +12,32 @@ import type { Match, MatchPrediction } from "@/lib/types";
 export const revalidate = 0;
 
 // ── Colour coding ─────────────────────────────────────────────────────────────
+// Green=exact(5), Blue=goal diff(3), Yellow=W/D/L(1), Red=wrong(0)
 
-type PickTier = "best" | "correct" | "wrong" | "pending";
+type PickTier = "exact_score" | "goal_diff" | "outcome" | "wrong" | "pending";
 
 function pickTier(pick: MatchPrediction): PickTier {
   if (pick.points_awarded === null || !pick.score_breakdown) return "pending";
-  if (pick.score_breakdown.correct_goal_difference) return "best";   // 3 pts
-  if (pick.score_breakdown.correct_outcome) return "correct";        // 1 pt
-  return "wrong";                                                     // 0 pts
+  if (pick.score_breakdown.exact_score) return "exact_score";            // 5 pts
+  if (pick.score_breakdown.correct_goal_difference) return "goal_diff";  // 3 pts
+  if (pick.score_breakdown.correct_outcome) return "outcome";            // 2 pts
+  return "wrong";                                                         // 0 pts
 }
 
 const TIER_CLASS: Record<PickTier, string> = {
-  best:    "border-gold/50 bg-gold/10",
-  correct: "border-emerald-300 bg-emerald-50",
-  wrong:   "border-red-200 bg-red-50",
-  pending: "border-neutral-200 bg-white",
+  exact_score: "border-emerald-400 bg-emerald-50",
+  goal_diff:   "border-blue-300 bg-blue-50",
+  outcome:     "border-yellow-300 bg-yellow-50",
+  wrong:       "border-red-300 bg-red-50",
+  pending:     "border-neutral-200 bg-white",
 };
 
 const TIER_LABEL: Record<PickTier, string> = {
-  best:    "Correct result + goal diff (3 pts)",
-  correct: "Right result (1 pt)",
-  wrong:   "Wrong call (0 pts)",
-  pending: "Not yet played",
+  exact_score: "🎯 Perfect call — exact scoreline (5 pts)",
+  goal_diff:   "Sharp eye — right result + goal margin (3 pts)",
+  outcome:     "Called it — right result W/D/L (2 pts)",
+  wrong:       "Missed this one (0 pts)",
+  pending:     "Not yet played",
 };
 
 const ROUND_ORDER = [
@@ -86,11 +90,12 @@ export default async function ParticipantPage({
     byRound.set(m.round, list);
   }
 
-  // Summary counts
+  // Summary counts (4 tiers)
   const scored = predictions.filter((p) => p.points_awarded !== null);
-  const bestCount  = scored.filter((p) => p.score_breakdown?.correct_goal_difference).length;
-  const rightCount = scored.filter((p) => p.score_breakdown?.correct_outcome && !p.score_breakdown.correct_goal_difference).length;
-  const wrongCount = scored.filter((p) => !p.score_breakdown?.correct_outcome).length;
+  const exactCount    = scored.filter((p) => p.score_breakdown?.exact_score).length;
+  const goalDiffCount = scored.filter((p) => p.score_breakdown?.correct_goal_difference && !p.score_breakdown.exact_score).length;
+  const outcomeCount  = scored.filter((p) => p.score_breakdown?.correct_outcome && !p.score_breakdown.correct_goal_difference).length;
+  const wrongCount    = scored.filter((p) => !p.score_breakdown?.correct_outcome).length;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -110,14 +115,18 @@ export default async function ParticipantPage({
           )}
         </div>
         {scored.length > 0 && (
-          <div className="flex gap-3 text-xs text-neutral-500">
+          <div className="flex flex-wrap gap-3 text-xs text-neutral-500">
             <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full border border-gold/50 bg-gold/30" />
-              {bestCount} best
+              <span className="h-2 w-2 rounded-full border border-emerald-400 bg-emerald-200" />
+              {exactCount} exact
             </span>
             <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full border border-emerald-300 bg-emerald-200" />
-              {rightCount} right
+              <span className="h-2 w-2 rounded-full border border-blue-300 bg-blue-200" />
+              {goalDiffCount} goal diff
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full border border-yellow-300 bg-yellow-200" />
+              {outcomeCount} W/D/L
             </span>
             <span className="inline-flex items-center gap-1">
               <span className="h-2 w-2 rounded-full border border-red-300 bg-red-200" />
@@ -188,9 +197,11 @@ export default async function ParticipantPage({
                               )}
                               {pick.points_awarded !== null && (
                                 <span className={`badge font-semibold ${
-                                  tier === "best"    ? "bg-gold/30 text-pitch" :
-                                  tier === "correct" ? "bg-emerald-100 text-emerald-700" :
-                                  "bg-neutral-100 text-neutral-500"
+                                  tier === "exact_score" ? "bg-emerald-100 text-emerald-700" :
+                                  tier === "goal_diff"   ? "bg-blue-100 text-blue-700" :
+                                  tier === "outcome"     ? "bg-yellow-100 text-yellow-700" :
+                                  tier === "wrong"       ? "bg-red-100 text-red-500" :
+                                  "bg-neutral-100 text-neutral-400"
                                 }`}>
                                   +{pick.points_awarded} pts
                                 </span>

@@ -129,7 +129,7 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
   if (teamsRes.error) throw teamsRes.error;
   // matchesRes failure is non-fatal -- we still show what we have.
 
-  // ── Layer 1: build from standings table ───────────────────────────────────
+  // \u2500\u2500 Layer 1: build from standings table \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const byGroup = new Map<string, GroupStanding[]>();
   for (const row of standingsRes.data as Array<Standing & { teams: { name: string } | null }>) {
     const { teams, ...rest } = row;
@@ -151,7 +151,7 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
     teamById.set(t.id, { name: t.name, group_letter: t.group_letter });
   }
 
-  // ── Layer 2: zero-rows for teams in the teams table with group_letter set ─
+  // \u2500\u2500 Layer 2: zero-rows for teams in the teams table with group_letter set \u2500
   for (const [id, t] of teamById) {
     if (!t.group_letter || seen.has(id)) continue;
     const list = byGroup.get(t.group_letter) ?? [];
@@ -160,7 +160,7 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
     seen.add(id);
   }
 
-  // ── Layer 3: zero-rows for teams found only via match data ────────────────
+  // \u2500\u2500 Layer 3: zero-rows for teams found only via match data \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   if (!matchesRes.error && matchesRes.data) {
     for (const m of matchesRes.data as Array<{
       group_letter: string | null;
@@ -232,6 +232,87 @@ export async function getMatchConsensus(matchIds: string[]): Promise<Map<string,
     result.set(pred.match_id, entry);
   }
   return result;
+}
+
+// ----------------------------------------------------------------------------
+// W/D/L outcome accuracy
+// ----------------------------------------------------------------------------
+
+export interface OutcomeAccuracyRow {
+  correct: number;
+  total: number;
+}
+
+/**
+ * Per-participant W/D/L prediction accuracy for all finished matches.
+ * "Correct" means sign(predicted_home - predicted_away) === sign(actual_home - actual_away).
+ */
+export async function getOutcomeAccuracy(): Promise<Map<string, OutcomeAccuracyRow>> {
+  const supabase = createServiceRoleClient();
+
+  const { data: finishedMatches, error: mErr } = await supabase
+    .from("matches")
+    .select("id, home_score, away_score")
+    .eq("status", "finished")
+    .not("home_score", "is", null)
+    .not("away_score", "is", null);
+  if (mErr) throw mErr;
+  if (!finishedMatches || finishedMatches.length === 0) return new Map();
+
+  const matchScores = new Map<string, { home: number; away: number }>(
+    (finishedMatches as { id: string; home_score: number; away_score: number }[]).map((m) => [
+      m.id,
+      { home: m.home_score, away: m.away_score },
+    ])
+  );
+
+  const matchIds = Array.from(matchScores.keys());
+  const { data: preds, error: pErr } = await supabase
+    .from("match_predictions")
+    .select("participant_id, match_id, predicted_home, predicted_away")
+    .in("match_id", matchIds);
+  if (pErr) throw pErr;
+
+  const result = new Map<string, OutcomeAccuracyRow>();
+  for (const p of (preds ?? []) as {
+    participant_id: string;
+    match_id: string;
+    predicted_home: number;
+    predicted_away: number;
+  }[]) {
+    const actual = matchScores.get(p.match_id);
+    if (!actual) continue;
+    const entry = result.get(p.participant_id) ?? { correct: 0, total: 0 };
+    entry.total += 1;
+    const predSign = Math.sign(p.predicted_home - p.predicted_away);
+    const actualSign = Math.sign(actual.home - actual.away);
+    if (predSign === actualSign) entry.correct += 1;
+    result.set(p.participant_id, entry);
+  }
+  return result;
+}
+
+// ----------------------------------------------------------------------------
+// Knockout matches for bracket visual
+// ----------------------------------------------------------------------------
+
+/** All knockout-round matches plus whether every group-stage match is finished. */
+export async function getKnockoutMatches(): Promise<{
+  matches: Match[];
+  allGroupStageFinished: boolean;
+}> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("matches")
+    .select("*")
+    .order("match_number", { ascending: true });
+  if (error) throw error;
+  const all = data as Match[];
+  const groupMatches = all.filter((m) => m.round === "Group Stage");
+  const knockoutMatches = all.filter((m) => m.round !== "Group Stage");
+  const allGroupStageFinished =
+    groupMatches.length > 0 && groupMatches.every((m) => m.status === "finished");
+  return { matches: knockoutMatches, allGroupStageFinished };
 }
 
 /** Most recent sync timestamp. */

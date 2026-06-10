@@ -52,9 +52,10 @@ function formatCountdown(iso: string): string | null {
 /** Colors the points badge by which scoring tier it landed in — lets you
  * scan a long list of results and immediately see your hits vs. misses. */
 function tierBadgeClass(points: number): string {
-  if (points >= SCORING.RESULT_AND_GOAL_DIFF) return "bg-gold/30 text-pitch";
-  if (points >= SCORING.RESULT_ONLY) return "bg-emerald-100 text-emerald-700";
-  return "bg-neutral-100 text-neutral-400";
+  if (points >= SCORING.EXACT_SCORE) return "bg-emerald-100 text-emerald-700";
+  if (points >= SCORING.RESULT_AND_GOAL_DIFF) return "bg-blue-100 text-blue-700";
+  if (points >= SCORING.RESULT_ONLY) return "bg-yellow-100 text-yellow-700";
+  return "bg-red-100 text-red-500";
 }
 
 interface Props {

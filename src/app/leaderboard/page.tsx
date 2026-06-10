@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { getLastSyncedAt, getMatches, getTeamNameMap } from "@/lib/data";
+import { getLastSyncedAt, getMatches, getTeamNameMap, getOutcomeAccuracy } from "@/lib/data";
 import {
   getCurrentParticipant,
   getLeaderboard,
@@ -16,7 +16,7 @@ import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
 
-const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+const MEDALS: Record<number, string> = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "no data synced yet";
@@ -28,10 +28,7 @@ function formatSyncedAt(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-// ── Favourite-team scoring ────────────────────────────────────────────────────
-// Points are based on the furthest round a team reached in finished matches.
-// Not cumulative — a team that reaches the Final scores 20 pts (if champion)
-// or 10 pts (runner-up), NOT 1 + 2 + 5 + 10.
+// \u2500\u2500 Favourite-team scoring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 const ROUND_PTS: Record<string, number> = {
   "Round of 16": 1,
@@ -55,7 +52,7 @@ function teamFurthestPts(teamId: string, matches: Match[]): number {
   return pts;
 }
 
-// ── Stage leader mini-card ────────────────────────────────────────────────────
+// \u2500\u2500 Stage leader mini-card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 function StageLeaderCard({
   label,
@@ -85,7 +82,7 @@ function StageLeaderCard({
       {hasStarted ? (
         <>
           <p className="text-lg font-bold">
-            {leader!.display_name} <span className="font-mono font-normal text-neutral-500">· {points} pts</span>
+            {leader!.display_name} <span className="font-mono font-normal text-neutral-500">&middot; {points} pts</span>
           </p>
           <p className="text-xs text-neutral-500">{displayDesc}</p>
         </>
@@ -99,7 +96,7 @@ function StageLeaderCard({
   );
 }
 
-// ── Award Accuracy Card ───────────────────────────────────────────────────────
+// \u2500\u2500 Award Accuracy Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 function AwardAccuracyCard({
   label,
@@ -139,8 +136,8 @@ function AwardAccuracyCard({
                   }`}
                 >
                   {name}
-                  {anyScored && correct && " ✓"}
-                  {anyScored && scored && !correct && " ✗"}
+                  {anyScored && correct && " \u2713"}
+                  {anyScored && scored && !correct && " \u2717"}
                 </span>
               </li>
             );
@@ -151,7 +148,7 @@ function AwardAccuracyCard({
   );
 }
 
-// ── Favourites Leaderboard ────────────────────────────────────────────────────
+// \u2500\u2500 Favourites Leaderboard \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 interface FavLeaderRow {
   participant_id: string;
@@ -176,7 +173,7 @@ function FavouritesLeaderboard({
         <p className="mt-0.5 text-xs text-neutral-500">
           Points for how far each participant&rsquo;s 3 favourite teams advance:
           R16 = 1 pt &middot; QF = 2 pts &middot; SF = 5 pts &middot; Runner-up = 10 pts &middot; Champion = 20 pts.
-          {!tournamentOver && " Updates live — totals lock after the Final."}
+          {!tournamentOver && " Updates live \u2014 totals lock after the Final."}
         </p>
       </div>
       <div className="card overflow-hidden">
@@ -224,7 +221,7 @@ function FavouritesLeaderboard({
   );
 }
 
-// ── Award categories shown as accuracy cards (awards only, not fav slots) ────
+// \u2500\u2500 Award categories shown as accuracy cards (awards only, not fav slots) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
   { key: "golden_boot",       label: "Golden Boot" },
@@ -232,10 +229,10 @@ const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
   { key: "best_young_player", label: "Best Young Player" },
 ];
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+// \u2500\u2500 Page \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, ...awardPicksArrays] =
+  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, outcomeAccuracy, ...awardPicksArrays] =
     await Promise.all([
       getLeaderboard(),
       getCurrentParticipant(),
@@ -245,6 +242,7 @@ export default async function LeaderboardPage() {
       getMatches(),
       getTeamNameMap(),
       getAllFavouritePicks(),
+      getOutcomeAccuracy(),
       ...AWARD_CATEGORIES.map((c) => getAwardPicks(c.key)),
     ]);
 
@@ -304,15 +302,12 @@ export default async function LeaderboardPage() {
   }
   const favLeaderRows = Array.from(favLeaderMap.values());
 
-  // Tournament is "over" once the Final has a finished result
   const tournamentOver = matches.some(
     (m) => m.round === "Final" && m.status === "finished"
   );
-  // Group stage is over when every group-stage match is finished
   const allGroupStageFinished = matches
     .filter((m) => m.round === "Group Stage")
     .every((m) => m.status === "finished");
-  // Gate Favourites Leaderboard until knockout matches are underway
   const anyKnockoutPlayed = matches.some(
     (m) => m.round !== "Group Stage" && m.status === "finished"
   );
@@ -328,9 +323,8 @@ export default async function LeaderboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Ranked by match prediction points. 3 pts for correct result and goal difference, 1 pt for
-            correct result only. Best calls (3-pt predictions) break ties. Click a row to expand inline,
-            or click a name to see their full prediction sheet.
+            Ranked by match prediction points. 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Exact scores break ties; W/D/L % is the final tiebreaker.
+            Click a row to expand inline, or click a name to see their full prediction sheet.
           </p>
         </div>
         <span className="badge shrink-0 bg-neutral-100 text-neutral-500" title={lastSynced ?? undefined}>
@@ -343,7 +337,7 @@ export default async function LeaderboardPage() {
           label="Group stage leader"
           completedLabel="Group stage winner"
           description="Most match-prediction points across Matchdays 1-17 (matches #1-72)."
-          completedDescription="Final tally — group stage is complete."
+          completedDescription="Final tally \u2014 group stage is complete."
           leader={groupLeader}
           points={groupLeader?.group_stage_points ?? 0}
           matchesScored={groupMatchesScored}
@@ -353,7 +347,7 @@ export default async function LeaderboardPage() {
           label="Knockout stage leader"
           completedLabel="Knockout stage winner"
           description="Most match-prediction points from the Round of 32 through the Final (matches #73-104)."
-          completedDescription="Final tally — tournament is complete."
+          completedDescription="Final tally \u2014 tournament is complete."
           leader={knockoutLeader}
           points={knockoutLeader?.knockout_points ?? 0}
           matchesScored={knockoutMatchesScored}
@@ -399,12 +393,12 @@ export default async function LeaderboardPage() {
           matches={matchById}
           teamNames={teamNames}
           allFavPicks={allFavPicksMap}
+          outcomeAccuracy={outcomeAccuracy}
         />
       )}
 
       {anyKnockoutPlayed && <FavouritesLeaderboard rows={favLeaderRows} tournamentOver={tournamentOver} />}
 
-      {/* Tournament award picks -- informational only */}
       <section>
         <div className="mb-3">
           <h2 className="font-semibold">Awards picks</h2>

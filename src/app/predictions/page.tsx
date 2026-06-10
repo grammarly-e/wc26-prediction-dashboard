@@ -166,17 +166,25 @@ export default async function PredictionsPage({
       <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
         <p className="mb-3 text-sm font-semibold">How scoring works</p>
         <div className="grid gap-2 sm:grid-cols-2">
-          <div className="rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm">
-            <span className="text-neutral-700">Correct result + goal difference</span>
-            <span className="ml-2 font-bold text-pitch">3 pts</span>
+          <div className="rounded-lg border border-emerald-400 bg-emerald-50 px-3 py-2 text-sm">
+            <div className="font-semibold text-emerald-700">🎯 Perfect call</div>
+            <div className="text-neutral-600">You named the exact final scoreline.</div>
+            <div className="mt-0.5 font-bold text-emerald-700">5 pts</div>
           </div>
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
-            <span className="text-neutral-700">Correct result only (W/D/L)</span>
-            <span className="ml-2 font-bold text-emerald-700">1 pt</span>
+          <div className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm">
+            <div className="font-semibold text-blue-700">Sharp eye</div>
+            <div className="text-neutral-600">Right result and correct goal margin.</div>
+            <div className="mt-0.5 font-bold text-blue-700">3 pts</div>
           </div>
-          <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm sm:col-span-2">
-            <span className="text-neutral-500">Wrong result</span>
-            <span className="ml-2 font-bold text-neutral-400">0 pts</span>
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm">
+            <div className="font-semibold text-yellow-700">Called it</div>
+            <div className="text-neutral-600">Right W/D/L outcome, wrong margin.</div>
+            <div className="mt-0.5 font-bold text-yellow-700">2 pts</div>
+          </div>
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm">
+            <div className="font-semibold text-red-500">Missed</div>
+            <div className="text-neutral-500">Wrong result entirely.</div>
+            <div className="mt-0.5 font-bold text-red-400">0 pts</div>
           </div>
         </div>
         <p className="mt-2 text-xs text-neutral-400">Tiers don&rsquo;t stack &mdash; you score the single highest tier you qualify for.</p>
