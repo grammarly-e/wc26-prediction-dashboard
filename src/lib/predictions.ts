@@ -287,3 +287,48 @@ export async function getAwardPicks(categoryKey: string): Promise<AwardPickRow[]
     }))
     .sort((a, b) => a.display_name.localeCompare(b.display_name));
 }
+
+// ============================================================================
+// All favourite team picks for every participant (champion / runner_up / third_place).
+// Used to show favourite picks in the leaderboard dropdown and to compute the
+// Favourites Leaderboard.
+// ============================================================================
+
+export interface ParticipantFavouritePicks {
+  participant_id: string;
+  display_name: string;
+  teamIds: string[]; // up to 3
+}
+
+export async function getAllFavouritePicks(): Promise<ParticipantFavouritePicks[]> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("tournament_predictions")
+    .select("participant_id, predicted_team_id, participants(display_name)")
+    .in("category_key", ["champion", "runner_up", "third_place"])
+    .not("predicted_team_id", "is", null);
+  if (error) throw error;
+
+  const byParticipant = new Map<string, ParticipantFavouritePicks>();
+  for (const row of data as Array<{
+    participant_id: string;
+    predicted_team_id: string;
+    participants: { display_name: string } | { display_name: string }[] | null;
+  }>) {
+    const name =
+      (Array.isArray(row.participants)
+        ? row.participants[0]?.display_name
+        : row.participants?.display_name) ?? "Unknown";
+    const existing = byParticipant.get(row.participant_id);
+    if (!existing) {
+      byParticipant.set(row.participant_id, {
+        participant_id: row.participant_id,
+        display_name: name,
+        teamIds: [row.predicted_team_id],
+      });
+    } else {
+      existing.teamIds.push(row.predicted_team_id);
+    }
+  }
+  return Array.from(byParticipant.values());
+}

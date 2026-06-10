@@ -11,12 +11,12 @@
 
 insert into prediction_categories (key, label, target_type, group_letter, points_value, locks_at, display_order) values
   -- Tournament-long awards — lock when the tournament kicks off
-  ('champion',            'Tournament Champion',          'team',   null, 50, '2026-06-11T13:00:00-06:00', 1),
-  ('runner_up',           'Runner-Up (Final loser)',      'team',   null, 30, '2026-06-11T13:00:00-06:00', 2),
-  ('third_place',         'Third-Place Finisher',         'team',   null, 20, '2026-06-11T13:00:00-06:00', 3),
-  ('golden_boot',         'Golden Boot (Top Scorer)',     'player', null, 35, '2026-06-11T13:00:00-06:00', 4),
-  ('golden_ball',         'Golden Ball (Best Player)',    'player', null, 30, '2026-06-11T13:00:00-06:00', 5),
-  ('best_young_player',   'Best Young Player',            'player', null, 25, '2026-06-11T13:00:00-06:00', 6),
+  ('champion',            'Tournament Champion',          'team',   null, 50, '2026-06-15T00:00:00Z', 1),
+  ('runner_up',           'Runner-Up (Final loser)',      'team',   null, 30, '2026-06-15T00:00:00Z', 2),
+  ('third_place',         'Third-Place Finisher',         'team',   null, 20, '2026-06-15T00:00:00Z', 3),
+  ('golden_boot',         'Golden Boot (Top Scorer)',     'player', null, 35, '2026-06-15T00:00:00Z', 4),
+  ('golden_ball',         'Golden Ball (Best Player)',    'player', null, 30, '2026-06-15T00:00:00Z', 5),
+  ('best_young_player',   'Best Young Player',            'player', null, 25, '2026-06-15T00:00:00Z', 6),
 
   -- Group-stage picks — who tops each group. Locked at tournament start so
   -- everyone predicts blind based on squads/form, not after watching results.

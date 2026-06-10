@@ -34,20 +34,27 @@ function teamsConfirmed(match: Match): boolean {
   return Boolean(match.team1_id && match.team2_id);
 }
 
-function LockedPredictionCard({ match }: { match: Match }) {
+// forceTeamsTBD: hide placeholder codes (e.g. "W-A1") during the group stage
+function LockedPredictionCard({ match, forceTeamsTBD }: { match: Match; forceTeamsTBD?: boolean }) {
+  const t1 = forceTeamsTBD ? "TBD" : (match.team1_code || "TBD");
+  const t2 = forceTeamsTBD ? "TBD" : (match.team2_code || "TBD");
   return (
     <div className="card flex flex-col gap-2 border border-dashed border-neutral-200 p-4 text-sm opacity-60">
       <div className="flex items-center justify-between text-xs text-neutral-500">
         <span>#{match.match_number} · {match.round}</span>
-        <span className="badge bg-neutral-100 text-neutral-500">Locked</span>
+        <span className="badge bg-neutral-100 text-neutral-500">
+          {forceTeamsTBD ? "Group stage pending" : "Locked"}
+        </span>
       </div>
       <div className="flex items-center justify-center gap-3 py-1 font-medium text-neutral-400 italic">
-        <span>{match.team1_code || "TBD"}</span>
+        <span>{t1}</span>
         <span className="text-xs not-italic">vs</span>
-        <span>{match.team2_code || "TBD"}</span>
+        <span>{t2}</span>
       </div>
       <p className="text-center text-xs text-neutral-400">
-        Unlocks once knockout teams are decided
+        {forceTeamsTBD
+          ? "Opens once all group stage matches are finished"
+          : "Unlocks once knockout teams are decided"}
       </p>
     </div>
   );
@@ -109,11 +116,22 @@ export default async function PredictionsPage({
     getMyMatchPredictions(participant.id),
   ]);
 
+  // Block ALL Round of 32 matches until every group-stage match is finished.
+  const allGroupStageFinished = matches.every(
+    (m) => m.round !== "Group Stage" || m.status === "finished"
+  );
+
+  // Progress bar denominator: only count matches the user can actually pick.
+  // During the group stage that is the 72 group matches; once group stage
+  // finishes it expands to all matches with confirmed teams.
+  const availableCount = allGroupStageFinished
+    ? matches.filter((m) => m.round === "Group Stage" || teamsConfirmed(m)).length
+    : matches.filter((m) => m.round === "Group Stage").length;
+
   const filteredMatches = filterMatches(matches, filterGroup, filterSearch, teamNames);
   const grouped = groupByRound(filteredMatches);
   const submittedCount = myPredictions.size;
-  const totalCount = matches.length;
-  const pct = totalCount > 0 ? Math.round((submittedCount / totalCount) * 100) : 0;
+  const pct = availableCount > 0 ? Math.round((submittedCount / availableCount) * 100) : 0;
 
   return (
     <div className="flex flex-col gap-8">
@@ -130,18 +148,18 @@ export default async function PredictionsPage({
               <div className="h-full rounded-full bg-pitch transition-all" style={{ width: `${pct}%` }} />
             </div>
             <span className="shrink-0 text-xs font-semibold tabular-nums text-neutral-600">
-              {submittedCount}/{totalCount} picks
+              {submittedCount}/{availableCount} picks
             </span>
-            {submittedCount === totalCount && totalCount > 0 && (
+            {submittedCount === availableCount && availableCount > 0 && (
               <span className="shrink-0 text-xs font-semibold text-emerald-600">All done ✓</span>
             )}
           </div>
         </div>
         <Link
           href="/predictions/categories"
-          className="badge shrink-0 bg-pitch text-gold hover:opacity-90"
+          className="shrink-0 rounded-xl bg-pitch px-5 py-3 text-sm font-bold text-gold shadow-md transition-opacity hover:opacity-90"
         >
-          Favourite teams + awards &rarr;
+          ⭐ Favourite Teams &amp; Awards
         </Link>
       </div>
 
@@ -175,10 +193,19 @@ export default async function PredictionsPage({
               {round}
             </h2>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {roundMatches.map((match) =>
-                round !== "Group Stage" && !teamsConfirmed(match) ? (
-                  <LockedPredictionCard key={match.id} match={match} />
-                ) : (
+              {roundMatches.map((match) => {
+                const groupStagePending = round === "Round of 32" && !allGroupStageFinished;
+                const teamsUnknown = round !== "Group Stage" && !teamsConfirmed(match);
+                if (groupStagePending || teamsUnknown) {
+                  return (
+                    <LockedPredictionCard
+                      key={match.id}
+                      match={match}
+                      forceTeamsTBD={groupStagePending}
+                    />
+                  );
+                }
+                return (
                   <MatchPredictionCard
                     key={match.id}
                     match={match}
@@ -186,8 +213,8 @@ export default async function PredictionsPage({
                     participantId={participant.id}
                     existing={myPredictions.get(match.id) ?? null}
                   />
-                )
-              )}
+                );
+              })}
             </div>
           </section>
         );

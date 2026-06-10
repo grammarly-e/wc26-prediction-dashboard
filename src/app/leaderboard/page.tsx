@@ -7,6 +7,7 @@ import {
   getStageLeaderboards,
   getVisibleMatchPredictionsByParticipant,
   getAwardPicks,
+  getAllFavouritePicks,
   type StageLeaderboardRow,
   type AwardPickRow,
 } from "@/lib/predictions";
@@ -27,59 +28,66 @@ function formatSyncedAt(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-// ── Determine actual top 3 from match results ─────────────────────────────────────────────────
-//
-// Returns a Set of team IDs (champion + runner-up + 3rd place) once the
-// Final and 3rd-place matches are both finished. Empty Set until then.
+// ── Favourite-team scoring ────────────────────────────────────────────────────
+// Points are based on the furthest round a team reached in finished matches.
+// Not cumulative — a team that reaches the Final scores 20 pts (if champion)
+// or 10 pts (runner-up), NOT 1 + 2 + 5 + 10.
 
-function getActualTop3TeamIds(matches: Match[]): Set<string> {
-  const top3 = new Set<string>();
+const ROUND_PTS: Record<string, number> = {
+  "Round of 16": 1,
+  "Quarter-final": 2,
+  "Semi-final": 5,
+};
 
-  const finalMatch = matches.find(
-    (m) => m.round === "Final" && m.status === "finished" && m.home_score != null && m.away_score != null
-  );
-  const thirdPlaceMatch = matches.find(
-    (m) => m.round === "Match for third place" && m.status === "finished" && m.home_score != null && m.away_score != null
-  );
-
-  if (finalMatch) {
-    if (finalMatch.team1_id) top3.add(finalMatch.team1_id);
-    if (finalMatch.team2_id) top3.add(finalMatch.team2_id);
+function teamFurthestPts(teamId: string, matches: Match[]): number {
+  let pts = 0;
+  for (const m of matches) {
+    if (m.status !== "finished") continue;
+    if (m.team1_id !== teamId && m.team2_id !== teamId) continue;
+    if (m.round === "Final" && m.home_score != null && m.away_score != null) {
+      const isTeam1 = m.team1_id === teamId;
+      const won = isTeam1 ? m.home_score > m.away_score : m.away_score > m.home_score;
+      pts = Math.max(pts, won ? 20 : 10);
+    } else if (m.round in ROUND_PTS) {
+      pts = Math.max(pts, ROUND_PTS[m.round]);
+    }
   }
-
-  if (thirdPlaceMatch) {
-    const winnerId =
-      thirdPlaceMatch.home_score! > thirdPlaceMatch.away_score!
-        ? thirdPlaceMatch.team1_id
-        : thirdPlaceMatch.team2_id;
-    if (winnerId) top3.add(winnerId);
-  }
-
-  return top3;
+  return pts;
 }
+
+// ── Stage leader mini-card ────────────────────────────────────────────────────
 
 function StageLeaderCard({
   label,
+  completedLabel,
   description,
+  completedDescription,
   leader,
   points,
   matchesScored,
+  isOver,
 }: {
   label: string;
+  completedLabel: string;
   description: string;
+  completedDescription: string;
   leader: StageLeaderboardRow | null;
   points: number;
   matchesScored: number;
+  isOver: boolean;
 }) {
+  const hasStarted = leader !== null && matchesScored > 0;
+  const displayLabel = hasStarted && isOver ? completedLabel : label;
+  const displayDesc = hasStarted && isOver ? completedDescription : description;
   return (
     <div className="card flex flex-col gap-1 p-4">
-      <p className="text-xs uppercase tracking-wide text-neutral-400">{label}</p>
-      {leader && matchesScored > 0 ? (
+      <p className="text-xs uppercase tracking-wide text-neutral-400">{displayLabel}</p>
+      {hasStarted ? (
         <>
           <p className="text-lg font-bold">
-            {leader.display_name} <span className="font-mono font-normal text-neutral-500">· {points} pts</span>
+            {leader!.display_name} <span className="font-mono font-normal text-neutral-500">· {points} pts</span>
           </p>
-          <p className="text-xs text-neutral-500">{description}</p>
+          <p className="text-xs text-neutral-500">{displayDesc}</p>
         </>
       ) : (
         <>
@@ -91,30 +99,18 @@ function StageLeaderCard({
   );
 }
 
-// ── Award Accuracy Card ────────────────────────────────────────────────────────────
-
-const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
-  { key: "champion",          label: "Champion" },
-  { key: "runner_up",         label: "Runner-up" },
-  { key: "third_place",       label: "3rd Place" },
-  { key: "golden_boot",       label: "Golden Boot" },
-  { key: "golden_ball",       label: "Golden Ball" },
-  { key: "best_young_player", label: "Best Young Player" },
-];
+// ── Award Accuracy Card ───────────────────────────────────────────────────────
 
 function AwardAccuracyCard({
   label,
   picks,
   teamNames,
-  actualTop3TeamIds,
 }: {
   label: string;
   picks: AwardPickRow[];
   teamNames: Map<string, string>;
-  actualTop3TeamIds?: Set<string>;
 }) {
   const anyScored = picks.some((p) => p.points_awarded !== null);
-
   return (
     <div className="card flex flex-col gap-2 p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
@@ -128,19 +124,12 @@ function AwardAccuracyCard({
               : (pick.predicted_player_name ?? "--");
             const scored = pick.points_awarded !== null;
             const correct = scored && (pick.points_awarded ?? 0) > 0;
-            // For favourite slots: highlight if this team is in the actual top 3
-            const isInTop3 =
-              actualTop3TeamIds &&
-              pick.predicted_team_id != null &&
-              actualTop3TeamIds.has(pick.predicted_team_id);
             return (
               <li key={pick.participant_id} className="flex items-center justify-between gap-2 text-xs">
                 <span className="text-neutral-600">{pick.display_name}</span>
                 <span
                   className={`font-medium ${
-                    isInTop3
-                      ? "text-emerald-600"
-                      : !anyScored
+                    !anyScored
                       ? "text-neutral-500"
                       : correct
                       ? "text-emerald-600"
@@ -150,9 +139,8 @@ function AwardAccuracyCard({
                   }`}
                 >
                   {name}
-                  {isInTop3 && " (Top 3)"}
-                  {!isInTop3 && anyScored && correct && " ✓"}
-                  {!isInTop3 && anyScored && scored && !correct && " ✗"}
+                  {anyScored && correct && " ✓"}
+                  {anyScored && scored && !correct && " ✗"}
                 </span>
               </li>
             );
@@ -163,10 +151,91 @@ function AwardAccuracyCard({
   );
 }
 
-// ── Page ────────────────────────────────────────────────────────────────────────────
+// ── Favourites Leaderboard ────────────────────────────────────────────────────
+
+interface FavLeaderRow {
+  participant_id: string;
+  display_name: string;
+  total: number;
+  detail: Array<{ name: string; pts: number }>;
+}
+
+function FavouritesLeaderboard({
+  rows,
+  tournamentOver,
+}: {
+  rows: FavLeaderRow[];
+  tournamentOver: boolean;
+}) {
+  if (rows.length === 0) return null;
+  const ranked = [...rows].sort((a, b) => b.total - a.total || a.display_name.localeCompare(b.display_name));
+  return (
+    <section>
+      <div className="mb-3">
+        <h2 className="font-semibold">Favourites Leaderboard</h2>
+        <p className="mt-0.5 text-xs text-neutral-500">
+          Points for how far each participant&rsquo;s 3 favourite teams advance:
+          R16 = 1 pt &middot; QF = 2 pts &middot; SF = 5 pts &middot; Runner-up = 10 pts &middot; Champion = 20 pts.
+          {!tournamentOver && " Updates live — totals lock after the Final."}
+        </p>
+      </div>
+      <div className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
+              <th className="px-4 py-3 font-semibold">Rank</th>
+              <th className="px-4 py-3 font-semibold">Participant</th>
+              <th className="px-4 py-3 font-semibold">Favourite teams</th>
+              <th className="px-4 py-3 text-right font-semibold">Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ranked.map((row, idx) => (
+              <tr key={row.participant_id} className="border-b border-neutral-100 last:border-0">
+                <td className="px-4 py-3 font-mono text-neutral-500">
+                  {MEDALS[idx + 1] ?? `#${idx + 1}`}
+                </td>
+                <td className="px-4 py-3 font-medium">{row.display_name}</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {row.detail.map((d) => (
+                      <span
+                        key={d.name}
+                        className={`badge ${
+                          d.pts >= 20
+                            ? "bg-gold/30 text-pitch"
+                            : d.pts > 0
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-neutral-100 text-neutral-500"
+                        }`}
+                      >
+                        {d.name}{d.pts > 0 ? ` +${d.pts}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{row.total}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+// ── Award categories shown as accuracy cards (awards only, not fav slots) ────
+
+const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
+  { key: "golden_boot",       label: "Golden Boot" },
+  { key: "golden_ball",       label: "Golden Ball" },
+  { key: "best_young_player", label: "Best Young Player" },
+];
+
+// ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, ...awardPicksArrays] =
+  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, ...awardPicksArrays] =
     await Promise.all([
       getLeaderboard(),
       getCurrentParticipant(),
@@ -175,8 +244,10 @@ export default async function LeaderboardPage() {
       getVisibleMatchPredictionsByParticipant(),
       getMatches(),
       getTeamNameMap(),
+      getAllFavouritePicks(),
       ...AWARD_CATEGORIES.map((c) => getAwardPicks(c.key)),
     ]);
+
   const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
 
   const matchById = new Map(matches.map((m) => [m.id, m]));
@@ -200,37 +271,56 @@ export default async function LeaderboardPage() {
     };
   });
 
+  // Build per-participant favourite team names for the dropdown
+  const allFavPicksMap = new Map<string, string[]>();
+  for (const fp of allFavPicks) {
+    const names = fp.teamIds
+      .map((id) => teamNames.get(id) ?? "Unknown")
+      .filter((n) => n !== "Unknown");
+    if (names.length > 0) allFavPicksMap.set(fp.participant_id, names);
+  }
+
+  // Build Favourites Leaderboard rows
+  const teamPtsCache = new Map<string, number>();
+  const getTeamPts = (teamId: string) => {
+    if (!teamPtsCache.has(teamId)) {
+      teamPtsCache.set(teamId, teamFurthestPts(teamId, matches));
+    }
+    return teamPtsCache.get(teamId)!;
+  };
+
+  const favLeaderMap = new Map<string, FavLeaderRow>();
+  for (const fp of allFavPicks) {
+    const detail = fp.teamIds.map((id) => ({
+      name: teamNames.get(id) ?? "Unknown",
+      pts: getTeamPts(id),
+    }));
+    favLeaderMap.set(fp.participant_id, {
+      participant_id: fp.participant_id,
+      display_name: fp.display_name,
+      total: detail.reduce((s, d) => s + d.pts, 0),
+      detail,
+    });
+  }
+  const favLeaderRows = Array.from(favLeaderMap.values());
+
+  // Tournament is "over" once the Final has a finished result
+  const tournamentOver = matches.some(
+    (m) => m.round === "Final" && m.status === "finished"
+  );
+  // Group stage is over when every group-stage match is finished
+  const allGroupStageFinished = matches
+    .filter((m) => m.round === "Group Stage")
+    .every((m) => m.status === "finished");
+  // Gate Favourites Leaderboard until knockout matches are underway
+  const anyKnockoutPlayed = matches.some(
+    (m) => m.round !== "Group Stage" && m.status === "finished"
+  );
+
   const groupLeader = stageLeaderboards.groupStage[0] ?? null;
   const knockoutLeader = stageLeaderboards.knockout[0] ?? null;
   const groupMatchesScored = stageLeaderboards.groupStage.reduce((sum, r) => sum + r.group_stage_matches_scored, 0);
   const knockoutMatchesScored = stageLeaderboards.knockout.reduce((sum, r) => sum + r.knockout_matches_scored, 0);
-
-  // Compute which participants have favourites in the actual top 3.
-  const actualTop3 = getActualTop3TeamIds(matches);
-  const top3Known = actualTop3.size === 3;
-
-  // favouriteHitsRecord: participant_id -> count of their 3 fav picks that are in actualTop3
-  const favouriteHitsRecord: Record<string, number> = {};
-  if (top3Known) {
-    // awardPicksArrays[0..2] = champion / runner_up / third_place
-    const favPicks = awardPicksArrays.slice(0, 3) as AwardPickRow[][];
-    const picksByParticipant = new Map<string, Set<string>>();
-    for (const catPicks of favPicks) {
-      for (const pick of catPicks) {
-        if (!pick.predicted_team_id) continue;
-        const s = picksByParticipant.get(pick.participant_id) ?? new Set<string>();
-        s.add(pick.predicted_team_id);
-        picksByParticipant.set(pick.participant_id, s);
-      }
-    }
-    for (const [pid, favTeams] of picksByParticipant) {
-      let hits = 0;
-      for (const tid of favTeams) {
-        if (actualTop3.has(tid)) hits++;
-      }
-      if (hits > 0) favouriteHitsRecord[pid] = hits;
-    }
-  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -251,17 +341,23 @@ export default async function LeaderboardPage() {
       <div className="grid gap-4 sm:grid-cols-2">
         <StageLeaderCard
           label="Group stage leader"
+          completedLabel="Group stage winner"
           description="Most match-prediction points across Matchdays 1-17 (matches #1-72)."
+          completedDescription="Final tally — group stage is complete."
           leader={groupLeader}
           points={groupLeader?.group_stage_points ?? 0}
           matchesScored={groupMatchesScored}
+          isOver={allGroupStageFinished}
         />
         <StageLeaderCard
           label="Knockout stage leader"
+          completedLabel="Knockout stage winner"
           description="Most match-prediction points from the Round of 32 through the Final (matches #73-104)."
+          completedDescription="Final tally — tournament is complete."
           leader={knockoutLeader}
           points={knockoutLeader?.knockout_points ?? 0}
           matchesScored={knockoutMatchesScored}
+          isOver={tournamentOver}
         />
       </div>
 
@@ -282,14 +378,14 @@ export default async function LeaderboardPage() {
             <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
           </div>
           <Link href="/predictions" className="ml-auto text-xs font-semibold underline-offset-2 hover:underline">
-            Predict scores --&gt;
+            Predict scores &rarr;
           </Link>
         </div>
       )}
 
       {rows.length === 0 ? (
         <div className="card p-6 text-center text-sm text-neutral-500">
-          Nobody&rsquo;s on the board yet --{" "}
+          Nobody&rsquo;s on the board yet &mdash;{" "}
           <a href="/predictions" className="font-semibold text-pitch hover:underline">
             be the first to make your predictions
           </a>
@@ -302,32 +398,29 @@ export default async function LeaderboardPage() {
           breakdowns={breakdowns}
           matches={matchById}
           teamNames={teamNames}
-          favouriteHits={top3Known && Object.keys(favouriteHitsRecord).length > 0 ? favouriteHitsRecord : undefined}
+          allFavPicks={allFavPicksMap}
         />
       )}
 
-      {/* Award picks -- informational only, no points */}
+      {anyKnockoutPlayed && <FavouritesLeaderboard rows={favLeaderRows} tournamentOver={tournamentOver} />}
+
+      {/* Tournament award picks -- informational only */}
       <section>
         <div className="mb-3">
-          <h2 className="font-semibold">Favourites &amp; Awards picks</h2>
+          <h2 className="font-semibold">Awards picks</h2>
           <p className="mt-0.5 text-xs text-neutral-500">
-            These don&rsquo;t affect standings -- just for fun.
-            {top3Known && " Teams marked (Top 3) are in the actual Champion / Runner-up / 3rd Place."}
+            Who everyone called for the Golden Boot, Golden Ball, and Best Young Player.
           </p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {AWARD_CATEGORIES.map((cat, i) => {
-            const isFavSlot = i < 3;
-            return (
-              <AwardAccuracyCard
-                key={cat.key}
-                label={cat.label}
-                picks={awardPicksArrays[i] as AwardPickRow[]}
-                teamNames={teamNames}
-                actualTop3TeamIds={isFavSlot && top3Known ? actualTop3 : undefined}
-              />
-            );
-          })}
+        <div className="grid gap-3 sm:grid-cols-3">
+          {AWARD_CATEGORIES.map((cat, i) => (
+            <AwardAccuracyCard
+              key={cat.key}
+              label={cat.label}
+              picks={awardPicksArrays[i] as AwardPickRow[]}
+              teamNames={teamNames}
+            />
+          ))}
         </div>
       </section>
     </div>

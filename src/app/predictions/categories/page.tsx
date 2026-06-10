@@ -83,8 +83,10 @@ export default async function CategoryPredictionsPage() {
     if (odds !== undefined) teamIdOdds[team.id] = odds;
   }
 
-  const totalCats = categories.length;
-  const filledCats = categories.filter((c) => myPicks.has(c.key)).length;
+  const RELEVANT_KEYS = new Set(["champion", "runner_up", "third_place", "golden_boot", "golden_ball", "best_young_player"]);
+  const relevantCats = categories.filter((c) => RELEVANT_KEYS.has(c.key));
+  const totalCats = relevantCats.length; // always 6
+  const filledCats = relevantCats.filter((c) => myPicks.has(c.key)).length;
 
   return (
     <div className="flex flex-col gap-8">
@@ -95,7 +97,7 @@ export default async function CategoryPredictionsPage() {
             These picks are just for fun &mdash; they don&rsquo;t affect your leaderboard score.
           </p>
           <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
-            {categories.map((c) => {
+            {relevantCats.map((c) => {
               const filled = myPicks.has(c.key);
               return (
                 <span
