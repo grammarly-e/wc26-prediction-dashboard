@@ -21,6 +21,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { reconnectByDisplayName } from "@/app/actions";
 
 export default function JoinForm() {
   const [name, setName] = useState("");
@@ -32,7 +33,7 @@ export default function JoinForm() {
     e.preventDefault();
     const trimmed = name.trim();
     if (trimmed.length < 2 || trimmed.length > 40) {
-      setError("Display names must be 2–40 characters.");
+      setError("Display names must be 2-40 characters.");
       return;
     }
 
@@ -41,7 +42,7 @@ export default function JoinForm() {
     const supabase = createClient();
 
     // Reuse an existing anonymous session if the page reloaded mid-signup
-    // (e.g. they typed a taken name and tried again) — no need for a fresh one.
+    // (e.g. they typed a taken name and tried again) -- no need for a fresh one.
     let user = (await supabase.auth.getUser()).data.user;
     if (!user) {
       const { data, error: authError } = await supabase.auth.signInAnonymously();
@@ -49,7 +50,7 @@ export default function JoinForm() {
         setStatus("error");
         setError(
           authError?.message?.includes("disabled")
-            ? "Anonymous sign-ins aren't enabled yet for this project — see SETUP_AND_VERIFY.md."
+            ? "Anonymous sign-ins aren't enabled yet for this project -- see SETUP_AND_VERIFY.md."
             : "Couldn't start a session. Try refreshing the page."
         );
         return;
@@ -62,17 +63,26 @@ export default function JoinForm() {
       .insert({ auth_user_id: user.id, display_name: trimmed });
 
     if (insertError) {
-      setStatus("idle");
-      setError(
-        insertError.code === "23505"
-          ? "That display name is taken — try another one."
-          : "Couldn't save your name. Try again."
-      );
-      return;
+      if (insertError.code === "23505") {
+        // Display name already exists -- reconnect to the existing account
+        // by updating its auth_user_id to the current anonymous session.
+        const ok = await reconnectByDisplayName(trimmed, user.id);
+        if (!ok) {
+          setStatus("error");
+          setError("Couldn't reconnect to that account. Try again.");
+          return;
+        }
+        // Fall through to router.refresh() -- participant row now points at
+        // the current session so getCurrentParticipant() will find it.
+      } else {
+        setStatus("idle");
+        setError("Couldn't save your name. Try again.");
+        return;
+      }
     }
 
-    // Re-render the server-component page now that a `participants` row
-    // exists for this session — getCurrentParticipant() will find it and
+    // Re-render the server-component page now that a participants row
+    // exists for this session -- getCurrentParticipant() will find it and
     // the page will swap from this form to the prediction UI.
     router.refresh();
   }
@@ -82,8 +92,8 @@ export default function JoinForm() {
       <div>
         <h2 className="text-lg font-bold">Join the prediction game</h2>
         <p className="mt-1 text-sm text-neutral-500">
-          Pick a display name — that&rsquo;s all it takes. No email, no password.
-          Your picks stay private until kickoff, then everyone compares.
+          Pick a display name -- that&rsquo;s all it takes. No email, no password.
+          Already joined? Enter your display name again to pick up where you left off.
         </p>
       </div>
       <input
@@ -102,7 +112,7 @@ export default function JoinForm() {
         disabled={status === "loading"}
         className="rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold transition hover:opacity-90 disabled:opacity-50"
       >
-        {status === "loading" ? "Joining…" : "Join"}
+        {status === "loading" ? "Joining..." : "Join"}
       </button>
     </form>
   );
