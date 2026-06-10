@@ -30,7 +30,7 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: import("@supabase/ssr").CookieOptions }[]) {
           // First, update the request cookies so any downstream middleware sees
           // the refreshed token.
           cookiesToSet.forEach(({ name, value }) =>
