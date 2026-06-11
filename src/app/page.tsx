@@ -24,11 +24,6 @@ const ROUND_ORDER: MatchRound[] = [
 
 const MIN_INSIGHT_SAMPLE = 3;
 
-// ----------------------------------------------------------------------------
-// Server-side filter logic -- reads ?group= and ?q= from the URL.
-// Filtering runs on the server so no client bundle cost.
-// ----------------------------------------------------------------------------
-
 function filterMatches(
   matches: Match[],
   group: string | null,
@@ -63,10 +58,6 @@ function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
   }
   return grouped;
 }
-
-// ----------------------------------------------------------------------------
-// Insight callouts -- Biggest Upset / Best Read
-// ----------------------------------------------------------------------------
 
 interface InsightCallout {
   match: Match;
@@ -169,11 +160,11 @@ export default async function MatchesPage({
     getLastSyncedAt(),
   ]);
 
-  const scheduledIds = allMatches.filter((m) => m.status === "scheduled").map((m) => m.id);
-  const consensus = await getMatchConsensus(scheduledIds);
+  // Fetch consensus for ALL matches -- scheduled ones show the pre-kickoff split;
+  // finished ones reveal how the group called it after the result.
+  const allMatchIds = allMatches.map((m) => m.id);
+  const consensus = await getMatchConsensus(allMatchIds);
 
-  // Group stage is "complete" only when every group stage match is finished.
-  // Until then, Round of 32 team names are hidden as TBD in the schedule.
   const groupStageMatches = allMatches.filter((m) => m.round === "Group Stage");
   const groupStageComplete =
     groupStageMatches.length > 0 && groupStageMatches.every((m) => m.status === "finished");
@@ -186,7 +177,6 @@ export default async function MatchesPage({
 
   const { upset, bestRead } = pickInsightCallouts(allMatches, insights);
 
-  // Apply filters to the schedule section only (live/results always show)
   const scheduleMatches = filterMatches(allMatches, filterGroup, filterSearch, teamNames);
   const grouped = groupByRound(scheduleMatches);
 
@@ -207,7 +197,7 @@ export default async function MatchesPage({
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {liveMatches.map((m) => (
-              <MatchCard key={m.id} match={m} teamNames={teamNames} />
+              <MatchCard key={m.id} match={m} teamNames={teamNames} consensus={consensus.get(m.id)} insight={insights.get(m.id)} />
             ))}
           </div>
         </section>
@@ -218,7 +208,7 @@ export default async function MatchesPage({
           <h2 className="mb-3 text-lg font-bold">Latest results</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {recentResults.map((m) => (
-              <MatchCard key={m.id} match={m} teamNames={teamNames} />
+              <MatchCard key={m.id} match={m} teamNames={teamNames} consensus={consensus.get(m.id)} insight={insights.get(m.id)} />
             ))}
           </div>
         </section>
@@ -255,6 +245,7 @@ export default async function MatchesPage({
                       match={m}
                       teamNames={teamNames}
                       consensus={consensus.get(m.id)}
+                      insight={insights.get(m.id)}
                       forceNamesTBD={round === "Round of 32" && !groupStageComplete}
                     />
                   ))}

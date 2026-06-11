@@ -85,7 +85,7 @@ export default async function CategoryPredictionsPage() {
 
   const RELEVANT_KEYS = new Set(["champion", "runner_up", "third_place", "golden_boot", "golden_ball", "best_young_player"]);
   const relevantCats = categories.filter((c) => RELEVANT_KEYS.has(c.key));
-  const totalCats = relevantCats.length; // always 6
+  const totalCats = relevantCats.length;
   const filledCats = relevantCats.filter((c) => myPicks.has(c.key)).length;
 
   return (
@@ -94,7 +94,7 @@ export default async function CategoryPredictionsPage() {
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">Favourites + Awards</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            These picks are just for fun &mdash; they don&rsquo;t affect your leaderboard score.
+            Your favourite teams earn points on the Favourites Leaderboard as they progress. Award picks (Golden Boot, Golden Ball, Best Young Player) score bonus points if you call them right.
           </p>
           <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
             {relevantCats.map((c) => {

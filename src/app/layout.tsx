@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import AutoRefresher from "@/components/AutoRefresher";
 import Nav from "@/components/Nav";
+import PendingBadge from "@/components/PendingBadge";
 
 import "./globals.css";
 
@@ -14,12 +16,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        {/* Polls every 30s and refreshes server data — see
-            src/components/AutoRefresher.tsx for why polling beats Supabase
-            Realtime here (one less manual setup step, same practical result
-            given the sync job's 10-minute cadence). */}
+        {/* Polls every 30s and refreshes server data — see AutoRefresher.tsx.
+            PendingBadge streams in via Suspense without blocking Nav render. */}
         <AutoRefresher />
-        <Nav />
+        <Nav pendingBadge={<Suspense fallback={null}><PendingBadge /></Suspense>} />
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
       </body>
     </html>

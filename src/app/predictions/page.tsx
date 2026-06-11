@@ -3,9 +3,10 @@ import Link from "next/link";
 import FilterBar from "@/components/FilterBar";
 import JoinForm from "@/components/JoinForm";
 import MatchPredictionCard from "@/components/MatchPredictionCard";
+import ScoreBanner from "@/components/ScoreBanner";
 import { getMatches, getTeamNameMap } from "@/lib/data";
 import { getCurrentParticipant, getMyMatchPredictions } from "@/lib/predictions";
-import type { Match, MatchRound } from "@/lib/types";
+import type { Match, MatchPrediction, MatchRound } from "@/lib/types";
 
 export const revalidate = 0;
 
@@ -34,7 +35,6 @@ function teamsConfirmed(match: Match): boolean {
   return Boolean(match.team1_id && match.team2_id);
 }
 
-// forceTeamsTBD: hide placeholder codes (e.g. "W-A1") during the group stage
 function LockedPredictionCard({ match, forceTeamsTBD }: { match: Match; forceTeamsTBD?: boolean }) {
   const t1 = forceTeamsTBD ? "TBD" : (match.team1_code || "TBD");
   const t2 = forceTeamsTBD ? "TBD" : (match.team2_code || "TBD");
@@ -84,6 +84,90 @@ function filterMatches(
   });
 }
 
+// ============================================================================
+// Personal stats — computed server-side from myPredictions
+// ============================================================================
+
+function PersonalStats({ predictions, totalAvailable }: { predictions: MatchPrediction[]; totalAvailable: number }) {
+  const scored = predictions.filter((p) => p.points_awarded !== null);
+  if (scored.length === 0) return null;
+
+  const totalPoints = scored.reduce((sum, p) => sum + (p.points_awarded ?? 0), 0);
+  const exactHits = scored.filter((p) => p.score_breakdown?.exact_score === true).length;
+  const correctOutcomes = scored.filter((p) => p.score_breakdown?.correct_outcome === true).length;
+  const accuracyPct = scored.length > 0 ? Math.round((correctOutcomes / scored.length) * 100) : 0;
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+      <p className="mb-3 text-sm font-semibold text-neutral-700">Your stats so far</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatTile label="Match points" value={String(totalPoints)} accent="text-pitch" />
+        <StatTile label="Exact scores" value={String(exactHits)} accent="text-emerald-600" />
+        <StatTile label="Outcome accuracy" value={`${accuracyPct}%`} accent="text-blue-600" />
+        <StatTile label="Matches scored" value={`${scored.length}/${totalAvailable}`} accent="text-neutral-600" />
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, accent }: { label: string; value: string; accent: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-lg border border-neutral-200 bg-white p-3">
+      <span className={`text-xl font-bold tabular-nums ${accent}`}>{value}</span>
+      <span className="text-xs text-neutral-500">{label}</span>
+    </div>
+  );
+}
+
+// ============================================================================
+// Matches kicking off in the next 24 hours
+// ============================================================================
+
+function TodaysMatches({
+  upcomingMatches,
+  teamNames,
+  participantId,
+  myPredictions,
+}: {
+  upcomingMatches: Match[];
+  teamNames: Map<string, string>;
+  participantId: string;
+  myPredictions: Map<string, MatchPrediction>;
+}) {
+  if (upcomingMatches.length === 0) return null;
+  const unpredictedCount = upcomingMatches.filter((m) => !myPredictions.has(m.id)).length;
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
+          Kicking off in the next 24 hours
+        </h2>
+        {unpredictedCount > 0 ? (
+          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-600">
+            {unpredictedCount} unpredicted
+          </span>
+        ) : (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-600">
+            All predicted
+          </span>
+        )}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {upcomingMatches.map((match) => (
+          <MatchPredictionCard
+            key={match.id}
+            match={match}
+            teamNames={teamNames}
+            participantId={participantId}
+            existing={myPredictions.get(match.id) ?? null}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default async function PredictionsPage({
   searchParams,
 }: {
@@ -116,25 +200,34 @@ export default async function PredictionsPage({
     getMyMatchPredictions(participant.id),
   ]);
 
-  // Block ALL Round of 32 matches until every group-stage match is finished.
   const allGroupStageFinished = matches.every(
     (m) => m.round !== "Group Stage" || m.status === "finished"
   );
 
-  // Progress bar denominator: only count matches the user can actually pick.
-  // During the group stage that is the 72 group matches; once group stage
-  // finishes it expands to all matches with confirmed teams.
   const availableCount = allGroupStageFinished
     ? matches.filter((m) => m.round === "Group Stage" || teamsConfirmed(m)).length
     : matches.filter((m) => m.round === "Group Stage").length;
+
+  const now = new Date();
+  const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const upcomingMatches = matches.filter((m) => {
+    if (m.status !== "scheduled" || !m.team1_id || !m.team2_id) return false;
+    const kickoff = new Date(m.kickoff_at);
+    return kickoff >= now && kickoff <= in24h;
+  });
 
   const filteredMatches = filterMatches(matches, filterGroup, filterSearch, teamNames);
   const grouped = groupByRound(filteredMatches);
   const submittedCount = myPredictions.size;
   const pct = availableCount > 0 ? Math.round((submittedCount / availableCount) * 100) : 0;
 
+  const allMyPredictions = Array.from(myPredictions.values());
+  const matchPoints = allMyPredictions.reduce((sum, p) => sum + (p.points_awarded ?? 0), 0);
+
   return (
     <div className="flex flex-col gap-8">
+      <ScoreBanner currentPoints={matchPoints} participantId={participant.id} />
+
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">Make Your Predictions</h1>
@@ -151,7 +244,7 @@ export default async function PredictionsPage({
               {submittedCount}/{availableCount} picks
             </span>
             {submittedCount === availableCount && availableCount > 0 && (
-              <span className="shrink-0 text-xs font-semibold text-emerald-600">All done ✓</span>
+              <span className="shrink-0 text-xs font-semibold text-emerald-600">All done</span>
             )}
           </div>
         </div>
@@ -159,15 +252,17 @@ export default async function PredictionsPage({
           href="/predictions/categories"
           className="shrink-0 rounded-xl bg-pitch px-5 py-3 text-sm font-bold text-gold shadow-md transition-opacity hover:opacity-90"
         >
-          ⭐ Favourite Teams &amp; Awards
+          Favourite Teams &amp; Awards
         </Link>
       </div>
+
+      <PersonalStats predictions={allMyPredictions} totalAvailable={availableCount} />
 
       <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
         <p className="mb-3 text-sm font-semibold">How scoring works</p>
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="rounded-lg border border-emerald-400 bg-emerald-50 px-3 py-2 text-sm">
-            <div className="font-semibold text-emerald-700">🎯 Perfect call</div>
+            <div className="font-semibold text-emerald-700">Perfect call</div>
             <div className="text-neutral-600">You named the exact final scoreline.</div>
             <div className="mt-0.5 font-bold text-emerald-700">5 pts</div>
           </div>
@@ -187,8 +282,15 @@ export default async function PredictionsPage({
             <div className="mt-0.5 font-bold text-red-400">0 pts</div>
           </div>
         </div>
-        <p className="mt-2 text-xs text-neutral-400">Tiers don&rsquo;t stack &mdash; you score the single highest tier you qualify for.</p>
+        <p className="mt-2 text-xs text-neutral-400">Tiers do not stack — you score the single highest tier you qualify for.</p>
       </div>
+
+      <TodaysMatches
+        upcomingMatches={upcomingMatches}
+        teamNames={teamNames}
+        participantId={participant.id}
+        myPredictions={myPredictions}
+      />
 
       <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
 

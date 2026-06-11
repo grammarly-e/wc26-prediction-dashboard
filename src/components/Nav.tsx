@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import type { ReactNode } from "react";
 
-const LINKS = [
+const BASE_LINKS = [
   { href: "/", label: "Matches" },
   { href: "/standings", label: "Standings" },
   { href: "/scorers", label: "Top Scorers" },
-  { href: "/predictions", label: "Predict Scores" },
+  { href: "/predictions", label: "Predict Scores", badgeSlot: "predictions" },
   { href: "/leaderboard", label: "Leaderboard" },
 ];
 
@@ -17,7 +18,7 @@ function isActive(pathname: string, href: string): boolean {
   return pathname.startsWith(href);
 }
 
-export default function Nav() {
+export default function Nav({ pendingBadge }: { pendingBadge?: ReactNode }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -31,17 +32,18 @@ export default function Nav() {
 
         {/* Desktop nav */}
         <nav className="hidden gap-1 text-sm font-medium text-neutral-600 sm:flex">
-          {LINKS.map((link) => (
+          {BASE_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className={`rounded-lg px-3 py-1.5 transition ${
+              className={`flex items-center rounded-lg px-3 py-1.5 transition ${
                 isActive(pathname, link.href)
                   ? "bg-pitch text-gold"
                   : "hover:bg-neutral-100 hover:text-pitch"
               }`}
             >
               {link.label}
+              {link.badgeSlot === "predictions" && pendingBadge}
             </Link>
           ))}
         </nav>
@@ -61,18 +63,19 @@ export default function Nav() {
       {/* Mobile menu */}
       {menuOpen && (
         <nav className="border-t border-neutral-100 px-4 py-2 sm:hidden">
-          {LINKS.map((link) => (
+          {BASE_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
               onClick={() => setMenuOpen(false)}
-              className={`block rounded-lg px-3 py-2 text-sm font-medium transition ${
+              className={`flex items-center rounded-lg px-3 py-2 text-sm font-medium transition ${
                 isActive(pathname, link.href)
                   ? "bg-pitch text-gold"
                   : "text-neutral-600 hover:bg-neutral-50 hover:text-pitch"
               }`}
             >
               {link.label}
+              {link.badgeSlot === "predictions" && pendingBadge}
             </Link>
           ))}
         </nav>

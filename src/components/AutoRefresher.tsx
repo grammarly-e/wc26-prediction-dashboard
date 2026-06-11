@@ -1,26 +1,28 @@
 "use client";
 
 // ============================================================================
-// Invisible client component: periodically re-fetches the current Server
-// Component tree so the dashboard reflects new data without a manual reload.
+// Invisible client component with two jobs:
 //
-// Why polling instead of Supabase Realtime: Realtime would technically work,
-// but it requires an extra manual step most people miss — enabling table
-// replication in the Supabase dashboard (Database > Replication) for each
-// watched table — and it adds a websocket subscription lifecycle to debug if
-// something looks stale. None of that buys anything here: the underlying data
-// only changes when the sync job runs (scripts/sync-live-data.ts via the
-// /api/sync route — triggered by GitHub Actions every 3 hours and Vercel Cron
-// once daily as a backstop; see .github/workflows/sync.yml, vercel.json, and
-// SETUP_AND_VERIFY.md). Polling every 30 seconds means the page always shows
-// the latest synced data within half a minute of a sync completing — there's
-// no reason to poll less often just because syncs themselves are infrequent.
+// 1. Periodic UI refresh (every 30 s) — calls router.refresh() so the page
+//    always shows the latest data from Supabase within half a minute of a
+//    sync completing, without a full page reload.
 //
-// `router.refresh()` re-runs the Server Component data fetch (see the
-// `revalidate = 0` pages under src/app/**), so the rendered HTML always
-// reflects the latest row in Supabase — no client-side state duplication.
+// 2. Staleness guard (once on mount) — calls /api/auto-sync, which checks
+//    whether the match data is older than 24 hours and triggers a full sync
+//    if so. This is a safety net for the primary hourly schedule (GitHub
+//    Actions, .github/workflows/sync.yml) and the daily Vercel Cron backstop
+//    (vercel.json). If both fail, the first page visitor that day still gets
+//    a sync kicked off automatically.
 //
-// Mount this once near the root (see src/app/layout.tsx).
+// Why polling instead of Supabase Realtime: Realtime requires manually
+// enabling table replication in the Supabase dashboard for each table and
+// adds a websocket lifecycle to debug. Polling every 30 seconds achieves
+// the same practical result with no extra setup.
+//
+// `router.refresh()` re-runs Server Component data fetches (pages marked
+// `revalidate = 0`), so the HTML always reflects current Supabase state.
+//
+// Mount this once near the root (src/app/layout.tsx).
 // ============================================================================
 
 import { useRouter } from "next/navigation";
@@ -31,6 +33,12 @@ const POLL_INTERVAL_MS = 30_000;
 export default function AutoRefresher() {
   const router = useRouter();
 
+  // One-time staleness check on mount — fires a sync if data is >24h old.
+  useEffect(() => {
+    fetch("/api/auto-sync").catch(() => {}); // fire-and-forget; errors are non-fatal
+  }, []);
+
+  // Periodic UI refresh so the page reflects newly-synced data quickly.
   useEffect(() => {
     const id = setInterval(() => router.refresh(), POLL_INTERVAL_MS);
     return () => clearInterval(id);
