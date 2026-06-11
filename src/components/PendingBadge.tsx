@@ -1,6 +1,6 @@
-// Server component — fetches the current participant's prediction coverage and
-// returns a badge showing how many upcoming matches are still unpredicted.
-// Rendered via Suspense in layout.tsx so it never blocks navigation.
+// Server component — counts upcoming matches the participant can actually
+// predict right now but hasn't yet. Mirrors the availability logic in
+// src/app/predictions/page.tsx so the badge stays in sync with the UI.
 import { getMatches } from "@/lib/data";
 import { getCurrentParticipant, getMyMatchPredictions } from "@/lib/predictions";
 
@@ -13,15 +13,19 @@ export default async function PendingBadge() {
     getMyMatchPredictions(participant.id),
   ]);
 
-  // Count scheduled matches with confirmed teams (i.e. ones the user CAN predict)
-  // that don't yet have a prediction.
-  const count = matches.filter(
-    (m) =>
-      m.status === "scheduled" &&
-      m.team1_id &&
-      m.team2_id &&
-      !myPredictions.has(m.id)
-  ).length;
+  // Mirror the predictions page: Round of 32+ are locked until every
+  // group stage match is finished, even if their team IDs are already set.
+  const allGroupStageFinished = matches.every(
+    (m) => m.round !== "Group Stage" || m.status === "finished"
+  );
+
+  const count = matches.filter((m) => {
+    if (m.status !== "scheduled") return false;
+    if (!m.team1_id || !m.team2_id) return false;
+    // Only count knockout matches once the group stage is complete.
+    if (m.round !== "Group Stage" && !allGroupStageFinished) return false;
+    return !myPredictions.has(m.id);
+  }).length;
 
   if (count === 0) return null;
 
