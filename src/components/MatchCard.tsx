@@ -15,6 +15,47 @@ function formatKickoff(iso: string): string {
   });
 }
 
+// ── Shock result helpers ──────────────────────────────────────────────────────
+
+function consensusOutcome(c: ConsensusData): "home" | "draw" | "away" {
+  if (c.home_win_count >= c.draw_count && c.home_win_count >= c.away_win_count) return "home";
+  if (c.away_win_count > c.draw_count && c.away_win_count > c.home_win_count) return "away";
+  return "draw";
+}
+
+function actualOutcome(home: number, away: number): "home" | "draw" | "away" {
+  if (home > away) return "home";
+  if (away > home) return "away";
+  return "draw";
+}
+
+// ── Score distribution helpers ────────────────────────────────────────────────
+
+interface ScoreBucket {
+  score: string;
+  count: number;
+  isActual: boolean;
+}
+
+function buildScoreDistribution(
+  predictions: MatchPredictionReveal[],
+  actualHome: number | null,
+  actualAway: number | null,
+): ScoreBucket[] {
+  const counts = new Map<string, number>();
+  for (const p of predictions) {
+    const key = `${p.predicted_home}-${p.predicted_away}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const actualKey =
+    actualHome !== null && actualAway !== null ? `${actualHome}-${actualAway}` : null;
+  return Array.from(counts.entries())
+    .map(([score, count]) => ({ score, count, isActual: score === actualKey }))
+    .sort((a, b) => b.count - a.count || (a.isActual ? -1 : b.isActual ? 1 : 0));
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function MatchCard({
   match,
   teamNames,
@@ -50,6 +91,29 @@ export default function MatchCard({
   // Show goal scorers on finished matches with goal events
   const showGoals = isFinished && events && events.length > 0;
 
+  // Shock result: consensus was >= 60% one way but actual result went the other way.
+  // Requires at least 4 predictions to avoid noise with tiny groups.
+  const SHOCK_THRESHOLD = 0.6;
+  const shockInfo = (() => {
+    if (!isFinished || !hasScore || !consensus || consensus.total < 4) return null;
+    const cOutcome = consensusOutcome(consensus);
+    const aOutcome = actualOutcome(match.home_score!, match.away_score!);
+    if (cOutcome === aOutcome) return null;
+    const cCount =
+      cOutcome === "home" ? consensus.home_win_count :
+      cOutcome === "away" ? consensus.away_win_count :
+      consensus.draw_count;
+    const pct = cCount / consensus.total;
+    if (pct < SHOCK_THRESHOLD) return null;
+    const label =
+      cOutcome === "home"
+        ? (team1.length > 12 ? "a home win" : team1)
+        : cOutcome === "away"
+        ? (team2.length > 12 ? "an away win" : team2)
+        : "a draw";
+    return { pct: Math.round(pct * 100), label };
+  })();
+
   return (
     <div className="card flex flex-col gap-2 p-4">
       <div className="flex items-center justify-between text-xs text-neutral-500">
@@ -78,6 +142,14 @@ export default function MatchCard({
         <span>{formatKickoff(match.kickoff_at)}</span>
         <span>{match.host_city ?? match.venue}</span>
       </div>
+
+      {/* Shock result flag */}
+      {shockInfo && (
+        <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+          <span aria-hidden="true">{"⚡"}</span>
+          <span>{shockInfo.pct}% tipped {shockInfo.label} — shock result</span>
+        </div>
+      )}
 
       {/* Pre-kickoff consensus summary (scheduled matches only) */}
       {match.status === "scheduled" && consensus && consensus.total > 0 && (
@@ -114,6 +186,17 @@ export default function MatchCard({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Score distribution */}
+      {showIndividual && allPredictions && allPredictions.length >= 2 && (
+        <div className="border-t border-neutral-100 pt-2">
+          <ScoreDistribution
+            predictions={allPredictions}
+            actualHome={match.home_score}
+            actualAway={match.away_score}
+          />
         </div>
       )}
 
@@ -160,7 +243,7 @@ export default function MatchCard({
         <details className="border-t border-neutral-100 pt-2 text-xs">
           <summary className="cursor-pointer select-none list-none text-neutral-500 hover:text-neutral-700 [&::-webkit-details-marker]:hidden">
             <span className="flex items-center gap-1">
-              <span className="text-neutral-400">▶</span>
+              <span className="text-neutral-400">{"▶"}</span>
               <span>Who predicted what</span>
               <span className="text-neutral-400">({allPredictions.length})</span>
             </span>
@@ -214,6 +297,60 @@ function OutcomeBar({
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
       </div>
+    </div>
+  );
+}
+
+function ScoreDistribution({
+  predictions,
+  actualHome,
+  actualAway,
+}: {
+  predictions: MatchPredictionReveal[];
+  actualHome: number | null;
+  actualAway: number | null;
+}) {
+  const buckets = buildScoreDistribution(predictions, actualHome, actualAway);
+  const maxCount = Math.max(...buckets.map((b) => b.count));
+  const shown = buckets.slice(0, 5);
+  const rest = buckets.length - shown.length;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+        Score predictions
+      </p>
+      {shown.map((b) => (
+        <div
+          key={b.score}
+          className={`flex items-center gap-2 text-xs ${b.isActual ? "text-emerald-700" : "text-neutral-600"}`}
+        >
+          <span
+            className={`w-10 shrink-0 text-right font-mono tabular-nums ${b.isActual ? "font-bold" : ""}`}
+          >
+            {b.score}
+          </span>
+          <div className="flex flex-1 items-center gap-1.5">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-neutral-100">
+              <div
+                className={`h-full rounded-full transition-all ${b.isActual ? "bg-emerald-400" : "bg-neutral-300"}`}
+                style={{ width: `${Math.round((b.count / maxCount) * 100)}%` }}
+              />
+            </div>
+            <span
+              className={`w-4 shrink-0 text-right tabular-nums ${b.isActual ? "font-semibold" : "text-neutral-400"}`}
+            >
+              {b.count}
+            </span>
+            {b.isActual && <span className="text-emerald-500">{"✓"}</span>}
+          </div>
+        </div>
+      ))}
+      {rest > 0 && (
+        <p className="text-[10px] text-neutral-400">
+          +{rest} other {rest === 1 ? "score" : "scores"} predicted
+        </p>
+      )}
     </div>
   );
 }
