@@ -4,10 +4,15 @@ import { flagForTeam } from "@/lib/flags";
 import {
   getLastSyncedAt,
   getMatchConsensus,
+  getMatchEvents,
   getMatches,
   getTeamNameMap,
 } from "@/lib/data";
-import { getMatchInsights, type MatchInsight } from "@/lib/predictions";
+import {
+  getFinishedMatchPredictions,
+  getMatchInsights,
+  type MatchInsight,
+} from "@/lib/predictions";
 import type { Match, MatchRound } from "@/lib/types";
 
 export const revalidate = 0;
@@ -163,7 +168,13 @@ export default async function MatchesPage({
   // Fetch consensus for ALL matches -- scheduled ones show the pre-kickoff split;
   // finished ones reveal how the group called it after the result.
   const allMatchIds = allMatches.map((m) => m.id);
-  const consensus = await getMatchConsensus(allMatchIds);
+  const finishedMatchIds = allMatches.filter((m) => m.status === "finished").map((m) => m.id);
+
+  const [consensus, events, allPredictions] = await Promise.all([
+    getMatchConsensus(allMatchIds),
+    getMatchEvents(finishedMatchIds),
+    getFinishedMatchPredictions(finishedMatchIds),
+  ]);
 
   const groupStageMatches = allMatches.filter((m) => m.round === "Group Stage");
   const groupStageComplete =
@@ -197,7 +208,15 @@ export default async function MatchesPage({
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {liveMatches.map((m) => (
-              <MatchCard key={m.id} match={m} teamNames={teamNames} consensus={consensus.get(m.id)} insight={insights.get(m.id)} />
+              <MatchCard
+                key={m.id}
+                match={m}
+                teamNames={teamNames}
+                consensus={consensus.get(m.id)}
+                insight={insights.get(m.id)}
+                events={events.get(m.id)}
+                allPredictions={allPredictions.get(m.id)}
+              />
             ))}
           </div>
         </section>
@@ -208,7 +227,15 @@ export default async function MatchesPage({
           <h2 className="mb-3 text-lg font-bold">Latest results</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {recentResults.map((m) => (
-              <MatchCard key={m.id} match={m} teamNames={teamNames} consensus={consensus.get(m.id)} insight={insights.get(m.id)} />
+              <MatchCard
+                key={m.id}
+                match={m}
+                teamNames={teamNames}
+                consensus={consensus.get(m.id)}
+                insight={insights.get(m.id)}
+                events={events.get(m.id)}
+                allPredictions={allPredictions.get(m.id)}
+              />
             ))}
           </div>
         </section>
@@ -246,6 +273,8 @@ export default async function MatchesPage({
                       teamNames={teamNames}
                       consensus={consensus.get(m.id)}
                       insight={insights.get(m.id)}
+                      events={events.get(m.id)}
+                      allPredictions={allPredictions.get(m.id)}
                       forceNamesTBD={round === "Round of 32" && !groupStageComplete}
                     />
                   ))}

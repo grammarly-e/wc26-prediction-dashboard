@@ -332,3 +332,66 @@ export async function getAllFavouritePicks(): Promise<ParticipantFavouritePicks[
   }
   return Array.from(byParticipant.values());
 }
+
+// ============================================================================
+// Per-participant predictions for finished matches — revealed after result
+// ============================================================================
+
+export interface MatchPredictionReveal {
+  display_name: string;
+  predicted_home: number;
+  predicted_away: number;
+  points_awarded: number | null;
+  exact_score: boolean;
+  correct_outcome: boolean;
+}
+
+export async function getFinishedMatchPredictions(
+  matchIds: string[]
+): Promise<Map<string, MatchPredictionReveal[]>> {
+  if (matchIds.length === 0) return new Map();
+  const supabase = createServiceRoleClient();
+
+  const { data, error } = await supabase
+    .from("match_predictions")
+    .select("match_id, predicted_home, predicted_away, points_awarded, score_breakdown, participants(display_name)")
+    .in("match_id", matchIds);
+  if (error) throw error;
+
+  const result = new Map<string, MatchPredictionReveal[]>();
+  for (const row of data as Array<{
+    match_id: string;
+    predicted_home: number;
+    predicted_away: number;
+    points_awarded: number | null;
+    score_breakdown: ScoreBreakdown | null;
+    participants: { display_name: string } | { display_name: string }[] | null;
+  }>) {
+    const display_name =
+      (Array.isArray(row.participants)
+        ? row.participants[0]?.display_name
+        : row.participants?.display_name) ?? "Unknown";
+    const reveal: MatchPredictionReveal = {
+      display_name,
+      predicted_home: row.predicted_home,
+      predicted_away: row.predicted_away,
+      points_awarded: row.points_awarded,
+      exact_score: row.score_breakdown?.exact_score ?? false,
+      correct_outcome: row.score_breakdown?.correct_outcome ?? false,
+    };
+    const list = result.get(row.match_id) ?? [];
+    list.push(reveal);
+    result.set(row.match_id, list);
+  }
+
+  // Sort: exact scores first, then correct outcome, then alphabetical name
+  for (const preds of result.values()) {
+    preds.sort((a, b) => {
+      if (a.exact_score !== b.exact_score) return a.exact_score ? -1 : 1;
+      if (a.correct_outcome !== b.correct_outcome) return a.correct_outcome ? -1 : 1;
+      return a.display_name.localeCompare(b.display_name);
+    });
+  }
+
+  return result;
+}

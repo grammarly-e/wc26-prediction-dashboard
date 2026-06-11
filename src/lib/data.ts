@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
-import type { Match, Standing, Team, TopScorer } from "./types";
+import type { Match, MatchEvent, Standing, Team, TopScorer } from "./types";
 
 /** id -> display name, for resolving team_id columns in the UI. */
 export async function getTeamNameMap(): Promise<Map<string, string>> {
@@ -326,4 +326,29 @@ export async function getLastSyncedAt(): Promise<string | null> {
     .maybeSingle();
   if (error) throw error;
   return data?.updated_at ?? null;
+}
+
+
+// ----------------------------------------------------------------------------
+// Match events (goals, own goals, penalties) for finished matches
+// ----------------------------------------------------------------------------
+
+export async function getMatchEvents(matchIds: string[]): Promise<Map<string, MatchEvent[]>> {
+  if (matchIds.length === 0) return new Map();
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("match_events")
+    .select("*")
+    .in("match_id", matchIds)
+    .in("event_type", ["goal", "own_goal", "penalty_goal"])
+    .order("minute", { ascending: true, nullsFirst: false });
+  if (error) throw error;
+
+  const result = new Map<string, MatchEvent[]>();
+  for (const event of (data ?? []) as MatchEvent[]) {
+    const list = result.get(event.match_id) ?? [];
+    list.push(event);
+    result.set(event.match_id, list);
+  }
+  return result;
 }

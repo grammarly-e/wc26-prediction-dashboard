@@ -1,8 +1,8 @@
 import StatusBadge from "./StatusBadge";
 import { flagForTeam } from "@/lib/flags";
-import type { Match } from "@/lib/types";
+import type { Match, MatchEvent } from "@/lib/types";
 import type { ConsensusData } from "@/lib/data";
-import type { MatchInsight } from "@/lib/predictions";
+import type { MatchInsight, MatchPredictionReveal } from "@/lib/predictions";
 
 function formatKickoff(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -21,12 +21,16 @@ export default function MatchCard({
   consensus,
   insight,
   forceNamesTBD,
+  events,
+  allPredictions,
 }: {
   match: Match;
   teamNames: Map<string, string>;
   consensus?: ConsensusData;
   insight?: MatchInsight;
   forceNamesTBD?: boolean;
+  events?: MatchEvent[];
+  allPredictions?: MatchPredictionReveal[];
 }) {
   const team1 = forceNamesTBD ? "TBD" : (match.team1_id ? teamNames.get(match.team1_id) ?? match.team1_code : match.team1_code);
   const team2 = forceNamesTBD ? "TBD" : (match.team2_id ? teamNames.get(match.team2_id) ?? match.team2_code : match.team2_code);
@@ -35,11 +39,16 @@ export default function MatchCard({
   const flag1 = forceNamesTBD ? null : flagForTeam(team1);
   const flag2 = forceNamesTBD ? null : flagForTeam(team2);
 
-  const showReveal =
-    match.status === "finished" &&
-    hasScore &&
-    consensus &&
-    consensus.total >= 3;
+  const isFinished = match.status === "finished";
+
+  // Show consensus prediction bars on finished matches with enough data
+  const showReveal = isFinished && hasScore && consensus && consensus.total >= 3;
+
+  // Show individual predictions on any finished match that has predictions
+  const showIndividual = isFinished && allPredictions && allPredictions.length > 0;
+
+  // Show goal scorers on finished matches with goal events
+  const showGoals = isFinished && events && events.length > 0;
 
   return (
     <div className="card flex flex-col gap-2 p-4">
@@ -70,6 +79,7 @@ export default function MatchCard({
         <span>{match.host_city ?? match.venue}</span>
       </div>
 
+      {/* Pre-kickoff consensus summary (scheduled matches only) */}
       {match.status === "scheduled" && consensus && consensus.total > 0 && (
         <div className="border-t border-neutral-100 pt-2 text-xs text-neutral-500">
           <span className="font-medium text-neutral-700">{consensus.total} {consensus.total === 1 ? "pick" : "picks"}</span>
@@ -82,6 +92,32 @@ export default function MatchCard({
         </div>
       )}
 
+      {/* Goal scorers */}
+      {showGoals && events && (
+        <div className="border-t border-neutral-100 pt-2">
+          <div className="flex flex-col gap-0.5">
+            {events.map((e) => {
+              const suffix =
+                e.event_type === "own_goal"
+                  ? " (OG)"
+                  : e.event_type === "penalty_goal"
+                  ? " (pen)"
+                  : "";
+              return (
+                <div key={e.id} className="flex items-center gap-1.5 text-xs text-neutral-600">
+                  <span className="w-7 shrink-0 text-right font-mono text-neutral-400">
+                    {e.minute != null ? `${e.minute}'` : ""}
+                  </span>
+                  <span aria-hidden="true">{"⚽"}</span>
+                  <span>{(e.player_name ?? "Unknown") + suffix}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Post-result consensus bars */}
       {showReveal && consensus && (
         <div className="border-t border-neutral-100 pt-2 text-xs text-neutral-500">
           <div className="mb-1 flex items-center justify-between">
@@ -117,6 +153,41 @@ export default function MatchCard({
             <p className="mt-1.5 text-xs text-neutral-400">Nobody called the exact score</p>
           )}
         </div>
+      )}
+
+      {/* Per-participant prediction reveal */}
+      {showIndividual && allPredictions && (
+        <details className="border-t border-neutral-100 pt-2 text-xs">
+          <summary className="cursor-pointer select-none list-none text-neutral-500 hover:text-neutral-700 [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-1">
+              <span className="text-neutral-400">▶</span>
+              <span>Who predicted what</span>
+              <span className="text-neutral-400">({allPredictions.length})</span>
+            </span>
+          </summary>
+          <div className="mt-2 flex flex-col gap-1">
+            {allPredictions.map((p, i) => (
+              <div key={i} className="flex items-center justify-between gap-2">
+                <span className="text-neutral-600">{p.display_name}</span>
+                <span
+                  className={`font-mono tabular-nums ${
+                    p.exact_score
+                      ? "font-semibold text-emerald-600"
+                      : p.correct_outcome
+                      ? "text-blue-500"
+                      : p.points_awarded !== null
+                      ? "text-neutral-400"
+                      : "text-neutral-500"
+                  }`}
+                >
+                  {p.predicted_home}-{p.predicted_away}
+                  {p.exact_score && <span className="ml-1">{"🎯"}</span>}
+                  {!p.exact_score && p.correct_outcome && <span className="ml-1 text-blue-400">{"✓"}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );
