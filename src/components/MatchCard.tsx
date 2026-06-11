@@ -5,12 +5,13 @@ import type { ConsensusData } from "@/lib/data";
 import type { MatchInsight, MatchPredictionReveal } from "@/lib/predictions";
 
 function formatKickoff(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
+  return new Date(iso).toLocaleString("en-SG", {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "Asia/Singapore",
     timeZoneName: "short",
   });
 }
