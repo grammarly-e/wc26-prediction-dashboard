@@ -353,11 +353,16 @@ export async function getMatchEvents(matchIds: string[]): Promise<Map<string, Ma
   if (matchIds.length === 0) return new Map();
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
-    .from("matches")
-    .select("updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .from("match_events")
+    .select("*")
+    .in("match_id", matchIds)
+    .order("minute", { ascending: true, nullsFirst: false });
   if (error) throw error;
-  return data?.updated_at ?? null;
+  const result = new Map<string, MatchEvent[]>();
+  for (const event of (data ?? []) as MatchEvent[]) {
+    const list = result.get(event.match_id) ?? [];
+    list.push(event);
+    result.set(event.match_id, list);
+  }
+  return result;
 }

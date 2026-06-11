@@ -25,7 +25,7 @@ function formatSyncedAt(iso: string | null): string {
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
-  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return new Date(iso).toLocaleString("en-SG", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "Asia/Singapore" });
 }
 
 // \u2500\u2500 Favourite-team scoring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -305,9 +305,9 @@ export default async function LeaderboardPage() {
   const tournamentOver = matches.some(
     (m) => m.round === "Final" && m.status === "finished"
   );
-  const allGroupStageFinished = matches
-    .filter((m) => m.round === "Group Stage")
-    .every((m) => m.status === "finished");
+  const groupStageMatches = matches.filter((m) => m.round === "Group Stage");
+  const allGroupStageFinished =
+    groupStageMatches.length > 0 && groupStageMatches.every((m) => m.status === "finished");
   const anyKnockoutPlayed = matches.some(
     (m) => m.round !== "Group Stage" && m.status === "finished"
   );

@@ -143,7 +143,7 @@ function SyncFooter({ lastSyncedAt }: { lastSyncedAt: string | null }) {
   return (
     <p className="mt-4 text-center text-xs text-neutral-400">
       {lastSyncedAt
-        ? `Live data last synced ${new Date(lastSyncedAt).toLocaleString()} · source: football-data.org`
+        ? `Live data last synced ${new Date(lastSyncedAt).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })} · source: football-data.org`
         : "No live data synced yet -- run `npm run sync` once FOOTBALL_DATA_API_KEY is configured."}
       {" "}This page updates automatically as new data arrives.
     </p>

@@ -11,7 +11,8 @@
     "sync": "tsx scripts/sync-live-data.ts",
     "seed:test": "tsx scripts/seed-test-data.ts",
     "clear:test": "tsx scripts/clear-test-data.ts",
-    "dev:test": "tsx scripts/dev-test.ts"
+    "dev:test": "tsx scripts/dev-test.ts",
+    "test": "node --test scripts/test-scoring.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
