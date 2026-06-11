@@ -22,12 +22,13 @@ const SLOT_LABELS: Record<string, string> = {
 };
 
 function formatLockTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
+  return new Date(iso).toLocaleString("en-SG", {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "Asia/Singapore",
     timeZoneName: "short",
   });
 }

@@ -318,6 +318,19 @@ export async function getKnockoutMatches(): Promise<{
   return { matches: knockoutMatches, allGroupStageFinished };
 }
 
+/** Kickoff time of the first match — used to lock all tournament award picks simultaneously. */
+export async function getFirstMatchKickoff(): Promise<string | null> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("matches")
+    .select("kickoff_at")
+    .order("kickoff_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.kickoff_at ?? null;
+}
+
 /** Most recent sync timestamp. */
 export async function getLastSyncedAt(): Promise<string | null> {
   const supabase = createServerSupabaseClient();
@@ -340,17 +353,11 @@ export async function getMatchEvents(matchIds: string[]): Promise<Map<string, Ma
   if (matchIds.length === 0) return new Map();
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
-    .from("match_events")
-    .select("*")
-    .in("match_id", matchIds)
-    .in("event_type", ["goal", "own_goal", "penalty_goal"])
-    .order("minute", { ascending: true, nullsFirst: false });
+    .from("matches")
+    .select("updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (error) throw error;
-  const result = new Map<string, MatchEvent[]>();
-  for (const event of (data ?? []) as MatchEvent[]) {
-    const list = result.get(event.match_id) ?? [];
-    list.push(event);
-    result.set(event.match_id, list);
-  }
-  return result;
+  return data?.updated_at ?? null;
 }

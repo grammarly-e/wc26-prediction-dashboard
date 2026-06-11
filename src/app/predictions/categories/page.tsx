@@ -3,7 +3,7 @@ import Link from "next/link";
 import CategoryPredictionCard from "@/components/CategoryPredictionCard";
 import FavouritesPickSection from "@/components/FavouritesPickSection";
 import JoinForm from "@/components/JoinForm";
-import { getTeamNameMap, getTeams } from "@/lib/data";
+import { getTeamNameMap, getTeams, getFirstMatchKickoff } from "@/lib/data";
 import { TEAM_ODDS } from "@/lib/odds";
 import { getCurrentParticipant, getMyTournamentPredictions, getPredictionCategories } from "@/lib/predictions";
 import type { PredictionCategory } from "@/lib/types";
@@ -84,14 +84,22 @@ export default async function CategoryPredictionsPage() {
     );
   }
 
-  const [categories, teams, teamNames, myPicks] = await Promise.all([
+  const [categories, teams, teamNames, myPicks, firstKickoff] = await Promise.all([
     getPredictionCategories(),
     getTeams(),
     getTeamNameMap(),
     getMyTournamentPredictions(participant.id),
+    getFirstMatchKickoff(),
   ]);
 
-  const grouped = groupCategories(categories);
+  // All tournament picks lock simultaneously when the first match kicks off.
+  // Override each category's locks_at so no individual category can be updated
+  // once the tournament starts, regardless of what the DB has stored.
+  const lockedCategories = firstKickoff
+    ? categories.map((c) => ({ ...c, locks_at: firstKickoff }))
+    : categories;
+
+  const grouped = groupCategories(lockedCategories);
   const displayGroups = (Object.entries(grouped) as [string, PredictionCategory[]][]).filter(
     ([, cats]) => cats.length > 0
   );
@@ -116,7 +124,7 @@ export default async function CategoryPredictionsPage() {
   }
 
   const RELEVANT_KEYS = new Set(["champion", "runner_up", "third_place", "golden_boot", "golden_ball", "best_young_player"]);
-  const relevantCats = categories.filter((c) => RELEVANT_KEYS.has(c.key));
+  const relevantCats = lockedCategories.filter((c) => RELEVANT_KEYS.has(c.key));
   const totalCats = relevantCats.length;
   const filledCats = relevantCats.filter((c) => myPicks.has(c.key)).length;
 
