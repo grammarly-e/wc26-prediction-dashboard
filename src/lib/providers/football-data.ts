@@ -158,3 +158,26 @@ export function groupLetterFromProviderGroup(group: string | null): string | nul
   const m = group.match(/([A-L])\s*$/i);
   return m ? m[1].toUpperCase() : null;
 }
+
+
+// ---- Per-match detail (goals, bookings, substitutions) ----
+// Available on the free tier for WC matches.
+
+export interface ProviderGoal {
+  minute: number | null;
+  injuryTime: number | null;
+  type: "NORMAL" | "OWN_GOAL" | "PENALTY";
+  team: { id: number; name: string } | null;
+  scorer: { id: number; name: string } | null;
+  assist: { id: number; name: string } | null;
+}
+
+export interface ProviderMatchDetail {
+  id: number;
+  goals: ProviderGoal[];
+}
+
+export async function fetchMatchDetail(matchId: number): Promise<ProviderMatchDetail> {
+  const data = await get<ProviderMatchDetail & { goals?: ProviderGoal[] }>(`/matches/${matchId}`);
+  return { id: data.id, goals: data.goals ?? [] };
+}

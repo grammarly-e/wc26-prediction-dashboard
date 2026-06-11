@@ -23,7 +23,7 @@
 //      "Hobby accounts are limited to daily cron jobs" — that was silently
 //      breaking every deploy and burning the daily deployment quota.
 //
-//   2. GitHub Actions (.github/workflows/sync.yml) — runs every 3 hours and
+//   2. GitHub Actions (.github/workflows/sync.yml) — runs every hour and
 //      hits this same endpoint with the `x-sync-secret` header. GitHub's
 //      scheduler has no such frequency limit, so this is how the app gets
 //      its real refresh cadence without needing a paid Vercel plan. Requires

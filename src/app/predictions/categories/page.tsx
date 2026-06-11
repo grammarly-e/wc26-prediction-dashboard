@@ -28,12 +28,44 @@ function groupCategories(categories: PredictionCategory[]) {
   return groups;
 }
 
-const GROUP_DESCRIPTIONS: Record<string, string> = {
-  "My 3 Favourite Teams":
-    "Pick 3 teams you're rooting for. Your combined odds must total 25% or under -- no stacking all the favourites in one entry.",
-  "Tournament Awards":
-    "Call the Golden Boot, Golden Ball, and Best Young Player. Just for bragging rights.",
-};
+// --------------------------------------------------------------------------
+// Scoring rules for the Favourites Leaderboard
+// --------------------------------------------------------------------------
+
+const FAVOURITE_SCORING = [
+  { stage: "Round of 16", pts: 1 },
+  { stage: "Quarter-final", pts: 2 },
+  { stage: "Semi-final", pts: 5 },
+  { stage: "Runner-up", pts: 10 },
+  { stage: "Champion", pts: 20 },
+] as const;
+
+function FavouritesScoringCard() {
+  return (
+    <div className="mb-5 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+      <p className="mb-1 text-sm font-semibold text-neutral-700">How favourite team points work</p>
+      <p className="mb-3 text-xs text-neutral-500">
+        Each team earns points for the furthest stage it reaches. Your total is the
+        sum of all 3 teams&rsquo; individual bests &mdash; so a Champion + SF + QF pick
+        would give you 20 + 5 + 2 = 27 pts.
+      </p>
+      <div className="grid grid-cols-5 gap-2">
+        {FAVOURITE_SCORING.map(({ stage, pts }) => (
+          <div
+            key={stage}
+            className="flex flex-col items-center rounded-lg border border-neutral-200 bg-white px-2 py-2.5 text-center"
+          >
+            <span className="text-xl font-bold tabular-nums text-pitch">{pts}</span>
+            <span className="mt-1 text-[10px] leading-tight text-neutral-500">{stage}</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-neutral-400">
+        Group stage or Round of 32 exit = 0 pts. Totals lock after the Final.
+      </p>
+    </div>
+  );
+}
 
 export default async function CategoryPredictionsPage() {
   const participant = await getCurrentParticipant();
@@ -121,32 +153,41 @@ export default async function CategoryPredictionsPage() {
       {displayGroups.map(([groupName, cats]) => (
         <section key={groupName}>
           <h2 className="mb-1 font-semibold text-neutral-700">{groupName}</h2>
-          {GROUP_DESCRIPTIONS[groupName] && (
-            <p className="mb-4 text-sm text-neutral-500">{GROUP_DESCRIPTIONS[groupName]}</p>
-          )}
 
           {groupName === "My 3 Favourite Teams" ? (
-            <FavouritesPickSection
-              categories={cats}
-              teams={playingTeams}
-              teamNames={teamNamesRecord}
-              existingTeamIds={existingFavouriteIds}
-              participantId={participant.id}
-              teamIdOdds={teamIdOdds}
-            />
+            <>
+              <p className="mb-4 text-sm text-neutral-500">
+                Pick 3 teams you&rsquo;re rooting for. Your combined win-probability odds must total{" "}
+                <strong>25% or under</strong> &mdash; no stacking all the favourites in one entry.
+              </p>
+              <FavouritesScoringCard />
+              <FavouritesPickSection
+                categories={cats}
+                teams={playingTeams}
+                teamNames={teamNamesRecord}
+                existingTeamIds={existingFavouriteIds}
+                participantId={participant.id}
+                teamIdOdds={teamIdOdds}
+              />
+            </>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {cats.map((category) => (
-                <CategoryPredictionCard
-                  key={category.key}
-                  category={category}
-                  teams={teams}
-                  teamNames={teamNames}
-                  existing={myPicks.get(category.key) ?? null}
-                  participantId={participant.id}
-                />
-              ))}
-            </div>
+            <>
+              <p className="mb-4 text-sm text-neutral-500">
+                Call the Golden Boot, Golden Ball, and Best Young Player. Just for bragging rights.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {cats.map((category) => (
+                  <CategoryPredictionCard
+                    key={category.key}
+                    category={category}
+                    teams={teams}
+                    teamNames={teamNames}
+                    existing={myPicks.get(category.key) ?? null}
+                    participantId={participant.id}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </section>
       ))}

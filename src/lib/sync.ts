@@ -39,6 +39,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  fetchMatchDetail,
   fetchMatches,
   fetchScorers,
   fetchStandings,
@@ -166,7 +167,7 @@ function findDbMatch(provider: ProviderMatch, dbMatches: DbMatchRow[]): DbMatchR
 // Step 1+2+3: matches, team resolution, scores/status
 // ----------------------------------------------------------------------------
 
-async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyFinished: DbMatchRow[] }> {
+async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyFinished: DbMatchRow[]; teamsByExternalId: Map<number, string> }> {
   console.log("Fetching matches from football-data.org …");
   const providerMatches = await fetchMatches();
 
@@ -183,6 +184,7 @@ async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyF
   );
 
   const newlyFinished: DbMatchRow[] = [];
+  const teamsByExternalId = new Map<number, string>(); // provider team id -> db team uuid
   let updated = 0;
   let unmatched = 0;
 
@@ -195,6 +197,8 @@ async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyF
 
     const team1Id = dbMatch.team1_id ?? (await resolveTeamId(supabase, pm.homeTeam.name, teamsByName, dbMatch.team1_code));
     const team2Id = dbMatch.team2_id ?? (await resolveTeamId(supabase, pm.awayTeam.name, teamsByName, dbMatch.team2_code));
+    if (pm.homeTeam.id) teamsByExternalId.set(pm.homeTeam.id, team1Id);
+    if (pm.awayTeam.id) teamsByExternalId.set(pm.awayTeam.id, team2Id);
 
     const newStatus = mapStatus(pm.status);
     const wasFinished = dbMatch.status === "finished";
@@ -230,7 +234,7 @@ async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyF
   }
 
   console.log(`Matches: ${updated} updated, ${unmatched} provider fixtures had no DB counterpart yet.`);
-  return { newlyFinished };
+  return { newlyFinished, teamsByExternalId };
 }
 
 // ----------------------------------------------------------------------------
@@ -458,6 +462,68 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
   console.log(`Scorers: ${written} rows upserted.`);
 }
 
+
+// ----------------------------------------------------------------------------
+// Step 4b: sync goal events for a newly-finished match
+// Called once per match immediately after scoring predictions.
+// Uses the external_id to fetch the match detail from football-data.org and
+// writes one row per goal (own goals and penalties included) to match_events.
+// Clears existing events first so re-runs are idempotent.
+// ----------------------------------------------------------------------------
+
+async function syncMatchEvents(
+  supabase: SupabaseClient<Database>,
+  matchDbId: string,
+  externalId: string,
+  teamsByExternalId: Map<number, string>,
+  matchNumber: number,
+) {
+  let detail;
+  try {
+    detail = await fetchMatchDetail(Number(externalId));
+  } catch (err) {
+    // Graceful degradation — match events are display-only; a failure here
+    // must never block scoring or crash the sync run.
+    console.warn(`  ! match_events: could not fetch detail for #${matchNumber}: ${(err as Error).message}`);
+    return;
+  }
+
+  if (!detail.goals || detail.goals.length === 0) {
+    return; // No goals (0-0, or provider returned empty — both fine)
+  }
+
+  // Clear stale events for this match before re-inserting.
+  await supabase.from("match_events").delete().eq("match_id", matchDbId);
+
+  const rows = detail.goals
+    .filter((g) => g.scorer?.name) // skip entries with no scorer name
+    .map((g) => {
+      const eventType =
+        g.type === "OWN_GOAL" ? "own_goal" :
+        g.type === "PENALTY"  ? "penalty_goal" :
+                                "goal";
+      const teamId = g.team?.id != null ? (teamsByExternalId.get(g.team.id) ?? null) : null;
+      return {
+        match_id: matchDbId,
+        team_id: teamId,
+        player_id: null,
+        player_name: g.scorer?.name ?? null,
+        minute: g.minute,
+        event_type: eventType,
+        detail: g.injuryTime ? `+${g.injuryTime}` : null,
+      };
+    });
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabase.from("match_events").insert(rows);
+  if (error) {
+    console.error(`  ✗ match_events for #${matchNumber}: ${error.message}`);
+  } else {
+    console.log(`  ✓ match_events: ${rows.length} goal(s) written for #${matchNumber}`);
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Main entry point
 // ----------------------------------------------------------------------------
@@ -466,11 +532,20 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
   const supabase = getServiceRoleClient();
 
   try {
-    const { newlyFinished } = await syncMatches(supabase);
+    const { newlyFinished, teamsByExternalId } = await syncMatches(supabase);
 
     if (newlyFinished.length > 0) {
       console.log(`Scoring ${newlyFinished.length} newly-finished match(es) …`);
       await Promise.all(newlyFinished.map((m) => scoreFinishedMatch(supabase, m)));
+
+      // Sync goal events for each newly-finished match (sequential to respect
+      // the 10 req/min rate limit — each call adds 1 API request on top of the
+      // 3 the main sync already used, so a burst of 7 matches still fits comfortably).
+      for (const m of newlyFinished) {
+        if (m.external_id) {
+          await syncMatchEvents(supabase, m.id, m.external_id, teamsByExternalId, m.match_number);
+        }
+      }
     }
 
     await syncStandings(supabase);
