@@ -190,17 +190,6 @@ export default function MatchCard({
         </div>
       )}
 
-      {/* Score distribution */}
-      {showIndividual && allPredictions && allPredictions.length >= 2 && (
-        <div className="border-t border-neutral-100 pt-2">
-          <ScoreDistribution
-            predictions={allPredictions}
-            actualHome={match.home_score}
-            actualAway={match.away_score}
-          />
-        </div>
-      )}
-
       {/* Post-result consensus bars */}
       {showReveal && consensus && (
         <div className="border-t border-neutral-100 pt-2 text-xs text-neutral-500">

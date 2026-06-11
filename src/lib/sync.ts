@@ -387,6 +387,44 @@ async function fetchScorersFromESPN(): Promise<NormalisedScorer[]> {
   }
 }
 
+/**
+ * Last-resort scorer aggregation: counts goals directly from the match_events
+ * table we already populate during each sync. Used when both external APIs
+ * return empty results (common early in the tournament).
+ * Assists are not tracked in match_events, so they're set to 0 here.
+ */
+async function buildScorersFromEvents(supabase: SupabaseClient<Database>): Promise<NormalisedScorer[]> {
+  const { data: events, error } = await supabase
+    .from("match_events")
+    .select("player_name, team_id, event_type")
+    .in("event_type", ["goal", "penalty_goal"])
+    .not("player_name", "is", null);
+  if (error || !events?.length) return [];
+
+  const { data: teams } = await supabase.from("teams").select("id, name");
+  const teamNameById = new Map<string, string>(
+    ((teams ?? []) as { id: string; name: string }[]).map((t) => [t.id, t.name])
+  );
+
+  const counts = new Map<string, { goals: number; teamId: string | null }>();
+  for (const row of events as { player_name: string | null; team_id: string | null; event_type: string }[]) {
+    if (!row.player_name) continue;
+    const entry = counts.get(row.player_name) ?? { goals: 0, teamId: row.team_id };
+    entry.goals += 1;
+    counts.set(row.player_name, entry);
+  }
+
+  return Array.from(counts.entries())
+    .map(([name, { goals, teamId }]) => ({
+      name,
+      teamName: teamId ? (teamNameById.get(teamId) ?? "") : "",
+      goals,
+      assists: 0,
+    }))
+    .filter((e) => e.goals > 0)
+    .sort((a, b) => b.goals - a.goals);
+}
+
 async function syncTopScorers(supabase: SupabaseClient<Database>) {
   console.log("Fetching top scorers …");
 
@@ -408,13 +446,22 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
     console.warn(`  ! football-data.org scorers failed: ${(err as Error).message}`);
   }
 
-  // Fallback: ESPN internal API
+  // Fallback 1: ESPN internal API
   if (!scorers.length) {
     scorers = await fetchScorersFromESPN();
     if (scorers.length) {
       console.log(`  ESPN fallback: ${scorers.length} scorers.`);
+    }
+  }
+
+  // Fallback 2: aggregate from our own match_events table.
+  // Works as soon as syncMatchEvents has run for at least one match with goals.
+  if (!scorers.length) {
+    scorers = await buildScorersFromEvents(supabase);
+    if (scorers.length) {
+      console.log(`  match_events fallback: ${scorers.length} scorers.`);
     } else {
-      console.log("  No scorer data yet from either source.");
+      console.log("  No scorer data yet from any source.");
       return;
     }
   }
@@ -465,6 +512,159 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
 
 
 // ----------------------------------------------------------------------------
+// Step 4b-alt: ESPN fallback for match events
+// Used when football-data.org returns no goal data for a finished match.
+// ----------------------------------------------------------------------------
+
+interface ESPNGoalRow {
+  player_name: string;
+  team_name: string;
+  minute: number;
+  event_type: "goal" | "own_goal" | "penalty_goal";
+  detail: string | null;
+}
+
+async function fetchGoalEventsFromESPN(
+  kickoffAt: string,
+  team1Name: string,
+  team2Name: string,
+): Promise<ESPNGoalRow[]> {
+  try {
+    const dateStr = kickoffAt.slice(0, 10).replace(/-/g, "");
+
+    // Step 1: find the ESPN event ID by scanning the day's scoreboard
+    const sbResp = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${dateStr}`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
+    );
+    if (!sbResp.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scoreboard = await sbResp.json() as any;
+
+    let espnEventId: string | null = null;
+    for (const event of (scoreboard.events ?? [])) {
+      if (event.status?.type?.state !== "post") continue; // skip unfinished
+      const comps: Array<{ team?: { displayName?: string } }> =
+        event.competitions?.[0]?.competitors ?? [];
+      const names = comps.map((c) => c.team?.displayName ?? "");
+      if (
+        names.some((n) => namesLikelyMatch(n, team1Name)) &&
+        names.some((n) => namesLikelyMatch(n, team2Name))
+      ) {
+        espnEventId = event.id as string;
+        break;
+      }
+    }
+    if (!espnEventId) return [];
+
+    // Step 2: fetch the match summary and parse keyEvents for goals
+    const sumResp = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${espnEventId}`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) },
+    );
+    if (!sumResp.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const summary = await sumResp.json() as any;
+
+    const rows: ESPNGoalRow[] = [];
+    for (const evt of (summary.keyEvents ?? [])) {
+      const typeText: string = (evt.type?.text ?? "").toLowerCase();
+      if (!typeText.includes("goal")) continue;
+
+      // Parse "23'" or "45+2'" into minute + optional injury time suffix
+      const displayValue: string = evt.clock?.displayValue ?? "";
+      const minuteMatch = displayValue.match(/^(\d+)(?:\+(\d+))?/);
+      const minute = minuteMatch ? parseInt(minuteMatch[1]) : 0;
+      const injuryTime = minuteMatch?.[2] ? parseInt(minuteMatch[2]) : null;
+
+      const participants: Array<{
+        athlete?: { displayName?: string };
+        type?: { text?: string };
+      }> = evt.participants ?? [];
+      const scorerEntry = participants.find(
+        (p) => (p.type?.text ?? "").toLowerCase() === "scorer",
+      );
+      const playerName = scorerEntry?.athlete?.displayName ?? null;
+      if (!playerName) continue;
+
+      const eventType: ESPNGoalRow["event_type"] =
+        typeText.includes("own goal") ? "own_goal" :
+        typeText.includes("penalty") ? "penalty_goal" :
+        "goal";
+
+      rows.push({
+        player_name: playerName,
+        team_name: evt.team?.displayName ?? "",
+        minute,
+        event_type: eventType,
+        detail: injuryTime ? `+${injuryTime}` : null,
+      });
+    }
+
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+/** Called when football-data.org returns no goals for a finished match. */
+async function syncMatchEventsFromESPN(
+  supabase: SupabaseClient<Database>,
+  matchDbId: string,
+  matchNumber: number,
+) {
+  const { data: match, error: mErr } = await supabase
+    .from("matches")
+    .select("kickoff_at, team1_id, team2_id")
+    .eq("id", matchDbId)
+    .single();
+  if (mErr || !match) return;
+
+  const matchRow = match as { kickoff_at: string; team1_id: string | null; team2_id: string | null };
+  const teamIds = [matchRow.team1_id, matchRow.team2_id].filter((id): id is string => !!id);
+  if (!teamIds.length) return;
+
+  const { data: teams } = await supabase.from("teams").select("id, name").in("id", teamIds);
+  if (!teams?.length) return;
+
+  const teamRows = teams as { id: string; name: string }[];
+  const teamNameById = new Map(teamRows.map((t) => [t.id, t.name]));
+  const teamIdByName = new Map(teamRows.map((t) => [t.name.toLowerCase().trim(), t.id]));
+  const team1Name = teamNameById.get(matchRow.team1_id ?? "") ?? "";
+  const team2Name = teamNameById.get(matchRow.team2_id ?? "") ?? "";
+
+  const espnGoals = await fetchGoalEventsFromESPN(matchRow.kickoff_at, team1Name, team2Name);
+  if (espnGoals.length === 0) return;
+
+  await supabase.from("match_events").delete().eq("match_id", matchDbId);
+
+  const rows = espnGoals.map((g) => {
+    let teamId: string | null = teamIdByName.get(g.team_name.toLowerCase().trim()) ?? null;
+    if (!teamId) {
+      for (const [name, id] of teamIdByName) {
+        if (namesLikelyMatch(name, g.team_name)) { teamId = id; break; }
+      }
+    }
+    return {
+      match_id: matchDbId,
+      team_id: teamId,
+      player_id: null,
+      player_name: g.player_name,
+      minute: g.minute,
+      event_type: g.event_type,
+      detail: g.detail,
+    };
+  });
+
+  const { error } = await supabase.from("match_events").insert(rows);
+  if (error) {
+    console.error(`  ✗ match_events (ESPN) for #${matchNumber}: ${error.message}`);
+  } else {
+    console.log(`  ✓ match_events (ESPN): ${rows.length} goal(s) written for #${matchNumber}`);
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Step 4b: sync goal events for a newly-finished match
 // Called once per match immediately after scoring predictions.
 // Uses the external_id to fetch the match detail from football-data.org and
@@ -490,7 +690,10 @@ async function syncMatchEvents(
   }
 
   if (!detail.goals || detail.goals.length === 0) {
-    return; // No goals (0-0, or provider returned empty — both fine)
+    // football-data.org has no events — try ESPN before giving up.
+    // A 0-0 result is handled gracefully: ESPN will also return no goals.
+    await syncMatchEventsFromESPN(supabase, matchDbId, matchNumber);
+    return;
   }
 
   // Clear stale events for this match before re-inserting.
