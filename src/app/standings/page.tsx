@@ -6,6 +6,12 @@ export const revalidate = 0;
 
 const GROUP_LETTERS = "ABCDEFGHIJKL".split("");
 
+/** Prefer DB-stored flag_emoji; fall back to name-based lookup for any team not yet populated. */
+function resolveFlag(row: GroupStanding): string | null {
+  if (row.flag_emoji) return row.flag_emoji;
+  return flagForTeam(row.team_name);
+}
+
 function GroupTable({ letter, rows }: { letter: string; rows: GroupStanding[] }) {
   return (
     <div className="card overflow-hidden">
@@ -28,7 +34,7 @@ function GroupTable({ letter, rows }: { letter: string; rows: GroupStanding[] })
             </thead>
             <tbody>
               {rows.map((row, i) => {
-                const flag = flagForTeam(row.team_name);
+                const flag = resolveFlag(row);
                 return (
                   <tr key={row.id} className={i < 2 ? "bg-pitch/5 font-medium" : ""}>
                     <td className="px-3 py-2">

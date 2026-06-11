@@ -69,12 +69,14 @@ export async function getRecentResults(limit = 6): Promise<Match[]> {
 
 export interface GroupStanding extends Standing {
   team_name: string;
+  flag_emoji?: string | null;
 }
 
 function blankStanding(
   teamId: string,
   groupLetter: string,
-  teamName: string
+  teamName: string,
+  flagEmoji?: string | null,
 ): GroupStanding {
   return {
     id: `pending-${teamId}`,
@@ -91,6 +93,7 @@ function blankStanding(
     rank: null,
     updated_at: "",
     team_name: teamName,
+    flag_emoji: flagEmoji ?? null,
   };
 }
 
@@ -111,12 +114,12 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
   const [standingsRes, teamsRes, matchesRes] = await Promise.all([
     supabase
       .from("standings")
-      .select("*, teams(name)")
+      .select("*, teams(name, flag_emoji)")
       .order("group_letter", { ascending: true })
       .order("rank", { ascending: true, nullsFirst: false }),
     supabase
       .from("teams")
-      .select("id, name, group_letter")
+      .select("id, name, group_letter, flag_emoji")
       .not("is_placeholder", "is", null)
       .order("name", { ascending: true }),
     supabase
@@ -131,9 +134,9 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
 
   // \u2500\u2500 Layer 1: build from standings table \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const byGroup = new Map<string, GroupStanding[]>();
-  for (const row of standingsRes.data as Array<Standing & { teams: { name: string } | null }>) {
+  for (const row of standingsRes.data as Array<Standing & { teams: { name: string; flag_emoji: string | null } | null }>) {
     const { teams, ...rest } = row;
-    const entry: GroupStanding = { ...rest, team_name: teams?.name ?? "Unknown" };
+    const entry: GroupStanding = { ...rest, team_name: teams?.name ?? "Unknown", flag_emoji: teams?.flag_emoji ?? null };
     const list = byGroup.get(entry.group_letter) ?? [];
     list.push(entry);
     byGroup.set(entry.group_letter, list);
@@ -146,16 +149,16 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
   }
 
   // Build a name + group lookup from ALL teams (including those with NULL group_letter).
-  const teamById = new Map<string, { name: string; group_letter: string | null }>();
-  for (const t of teamsRes.data as Array<{ id: string; name: string; group_letter: string | null }>) {
-    teamById.set(t.id, { name: t.name, group_letter: t.group_letter });
+  const teamById = new Map<string, { name: string; group_letter: string | null; flag_emoji: string | null }>();
+  for (const t of teamsRes.data as Array<{ id: string; name: string; group_letter: string | null; flag_emoji: string | null }>) {
+    teamById.set(t.id, { name: t.name, group_letter: t.group_letter, flag_emoji: t.flag_emoji ?? null });
   }
 
   // \u2500\u2500 Layer 2: zero-rows for teams in the teams table with group_letter set \u2500
   for (const [id, t] of teamById) {
     if (!t.group_letter || seen.has(id)) continue;
     const list = byGroup.get(t.group_letter) ?? [];
-    list.push(blankStanding(id, t.group_letter, t.name));
+    list.push(blankStanding(id, t.group_letter, t.name, t.flag_emoji));
     byGroup.set(t.group_letter, list);
     seen.add(id);
   }
@@ -173,7 +176,7 @@ export async function getStandingsByGroup(): Promise<Map<string, GroupStanding[]
         const info = teamById.get(tid);
         const name = info?.name ?? "Unknown";
         const list = byGroup.get(m.group_letter) ?? [];
-        list.push(blankStanding(tid, m.group_letter, name));
+        list.push(blankStanding(tid, m.group_letter, name, info?.flag_emoji));
         byGroup.set(m.group_letter, list);
         seen.add(tid);
       }
@@ -343,7 +346,6 @@ export async function getMatchEvents(matchIds: string[]): Promise<Map<string, Ma
     .in("event_type", ["goal", "own_goal", "penalty_goal"])
     .order("minute", { ascending: true, nullsFirst: false });
   if (error) throw error;
-
   const result = new Map<string, MatchEvent[]>();
   for (const event of (data ?? []) as MatchEvent[]) {
     const list = result.get(event.match_id) ?? [];

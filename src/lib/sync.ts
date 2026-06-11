@@ -29,11 +29,12 @@
 //      see the caveat in src/lib/providers/football-data.ts).
 //
 // Respects football-data.org's free-tier rate limit (10 req/min): a full run
-// makes at most 3 provider calls (matches, standings, scorers), so even a
-// 1-minute cron interval would be safe. In production this runs every hour
-// via GitHub Actions (.github/workflows/sync.yml), once daily via Vercel Cron
-// as a backstop (vercel.json), and on-demand via /api/auto-sync whenever a
-// visitor loads the app and data is older than 24 h.
+// makes at most 9 provider calls (3 base: matches + standings + scorers, plus
+// up to MAX_EVENT_FETCHES=6 goal-detail calls). Any newly-finished matches that
+// exceed the cap are deferred to the next run via backfillMissingMatchEvents().
+// In production this runs every hour via GitHub Actions (.github/workflows/sync.yml),
+// once daily via Vercel Cron as a backstop (vercel.json), and on-demand via
+// /api/auto-sync whenever a visitor loads the app and data is older than 24 h.
 // ============================================================================
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -525,8 +526,58 @@ async function syncMatchEvents(
 }
 
 // ----------------------------------------------------------------------------
+// Step 4c: backfill goal events for matches deferred by a prior rate-limited run
+// ----------------------------------------------------------------------------
+
+/**
+ * Sync events for finished matches that scored (goals > 0) but still lack goal
+ * data in the DB — either from a prior capped run or a transient fetch failure.
+ *
+ * `budget` caps API calls so the caller's total never exceeds MAX_EVENT_FETCHES.
+ * 0-0 results are skipped intentionally: they have no events to fetch and would
+ * waste a budget slot on every subsequent run.
+ */
+async function backfillMissingMatchEvents(
+  supabase: SupabaseClient<Database>,
+  teamsByExternalId: Map<number, string>,
+  budget: number,
+): Promise<void> {
+  if (budget <= 0) return;
+
+  const [finishedRes, existingRes] = await Promise.all([
+    supabase
+      .from("matches")
+      .select("id, match_number, external_id")
+      .eq("status", "finished")
+      .not("external_id", "is", null)
+      .or("home_score.gt.0,away_score.gt.0"),
+    supabase.from("match_events").select("match_id"),
+  ]);
+  if (finishedRes.error) return; // non-fatal — events are display-only
+
+  const withEvents = new Set(
+    (existingRes.data ?? []).map((e: { match_id: string }) => e.match_id)
+  );
+  const allFinished = finishedRes.data as Array<{ id: string; match_number: number; external_id: string }>;
+  const missing = allFinished
+    .filter((m) => !withEvents.has(m.id))
+    .slice(0, budget);
+
+  if (missing.length === 0) return;
+  console.log(`  Backfilling events for ${missing.length} match(es) from prior deferred run(s) …`);
+  for (const m of missing) {
+    await syncMatchEvents(supabase, m.id, m.external_id, teamsByExternalId, m.match_number);
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Main entry point
 // ----------------------------------------------------------------------------
+
+// Football-data.org free tier: 10 req/min. A full run uses 3 base calls
+// (fetchMatches, fetchStandings, fetchScorers) + up to MAX_EVENT_FETCHES
+// goal-detail calls. Total: 3 + 6 = 9, safely under the limit.
+const MAX_EVENT_FETCHES = 6;
 
 export async function runSync(): Promise<{ ok: boolean; message: string; finishedScored: number }> {
   const supabase = getServiceRoleClient();
@@ -534,22 +585,31 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
   try {
     const { newlyFinished, teamsByExternalId } = await syncMatches(supabase);
 
+    // eventBudget is shared across the newly-finished pass and the backfill
+    // pass so total event-detail API calls never exceed MAX_EVENT_FETCHES.
+    let eventBudget = MAX_EVENT_FETCHES;
+
     if (newlyFinished.length > 0) {
       console.log(`Scoring ${newlyFinished.length} newly-finished match(es) …`);
       await Promise.all(newlyFinished.map((m) => scoreFinishedMatch(supabase, m)));
 
-      // Sync goal events for each newly-finished match (sequential to respect
-      // the 10 req/min rate limit — each call adds 1 API request on top of the
-      // 3 the main sync already used, so a burst of 7 matches still fits comfortably).
       for (const m of newlyFinished) {
-        if (m.external_id) {
-          await syncMatchEvents(supabase, m.id, m.external_id, teamsByExternalId, m.match_number);
+        if (!m.external_id) continue;
+        if (eventBudget <= 0) {
+          console.warn(`  ! Rate-limit cap: event fetch for match #${m.match_number} deferred to next sync.`);
+          continue;
         }
+        await syncMatchEvents(supabase, m.id, m.external_id, teamsByExternalId, m.match_number);
+        eventBudget--;
       }
     }
 
     await syncStandings(supabase);
     await syncTopScorers(supabase);
+
+    // Backfill any finished matches that still lack goal data, using whatever
+    // event budget remains after the newly-finished pass above.
+    await backfillMissingMatchEvents(supabase, teamsByExternalId, eventBudget);
 
     const msg = `Sync complete. ${newlyFinished.length} match(es) newly scored.`;
     console.log(msg);

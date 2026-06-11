@@ -45,6 +45,20 @@ function tierBadgeClass(points: number): string {
   return "bg-red-100 text-red-500";
 }
 
+/** Returns the length of the participant's current hot streak (consecutive scored matches with ≥1 pt). */
+function getHotStreak(picks: MatchPrediction[], matches: Map<string, Match>): number {
+  const scored = picks
+    .filter((p) => p.points_awarded !== null)
+    .map((p) => ({ pts: p.points_awarded ?? 0, num: matches.get(p.match_id)?.match_number ?? 0 }))
+    .sort((a, b) => b.num - a.num);
+  let streak = 0;
+  for (const { pts } of scored) {
+    if (pts > 0) streak++;
+    else break;
+  }
+  return streak;
+}
+
 type PickResult = "exact_score" | "goal_diff" | "outcome" | "wrong" | "pending";
 
 function pickResult(pick: MatchPrediction): PickResult {
@@ -152,6 +166,7 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
             const favTeams = allFavPicks?.get(row.participant_id) ?? [];
             const acc = outcomeAccuracy?.get(row.participant_id);
             const wdlPct = acc && acc.total > 0 ? Math.round((acc.correct / acc.total) * 100) : null;
+            const streak = getHotStreak(picks, matches);
             return (
               <Fragment key={row.participant_id}>
                 <tr
@@ -196,6 +211,11 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                       {favHits > 0 && (
                         <span className="badge bg-emerald-100 text-emerald-700 text-[10px]">
                           {favHits}/3 favs in top 3
+                        </span>
+                      )}
+                      {streak >= 3 && (
+                        <span className="badge bg-orange-100 text-orange-600 text-[10px]" title={`${streak} correct picks in a row`}>
+                          🔥{streak > 3 ? ` ${streak}` : ""}
                         </span>
                       )}
                     </span>

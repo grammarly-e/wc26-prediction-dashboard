@@ -224,9 +224,30 @@ export default async function PredictionsPage({
   const allMyPredictions = Array.from(myPredictions.values());
   const matchPoints = allMyPredictions.reduce((sum, p) => sum + (p.points_awarded ?? 0), 0);
 
+  // Count unsubmitted knockout predictions so the banner can tell participants
+  // whether they still need to act.
+  const knockoutWithTeams = matches.filter(
+    (m) => m.round !== "Group Stage" && m.team1_id && m.team2_id
+  );
+  const unpredictedKnockout = knockoutWithTeams.filter((m) => !myPredictions.has(m.id)).length;
+
   return (
     <div className="flex flex-col gap-8">
       <ScoreBanner currentPoints={matchPoints} participantId={participant.id} />
+
+      {allGroupStageFinished && (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3">
+          <p className="text-sm font-semibold text-emerald-800">
+            🏆 Knockout stage predictions are open!
+          </p>
+          <p className="mt-0.5 text-xs text-emerald-700">
+            All group stage matches are finished. Scroll down to predict the Round of 32 onwards.
+            {unpredictedKnockout > 0
+              ? ` You have ${unpredictedKnockout} knockout match${unpredictedKnockout === 1 ? "" : "es"} left to predict.`
+              : " You've predicted every confirmed match — nice work."}
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
