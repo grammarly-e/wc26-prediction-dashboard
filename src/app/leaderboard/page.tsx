@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { getLastSyncedAt, getMatches, getTeamNameMap, getOutcomeAccuracy } from "@/lib/data";
+import { getLastSyncedAt, getMatches, getTeamNameMap, getOutcomeAccuracy, getTopScorers } from "@/lib/data";
 import {
   getCurrentParticipant,
   getLeaderboard,
@@ -102,23 +102,36 @@ function AwardAccuracyCard({
   label,
   picks,
   teamNames,
+  goalsByPlayer,
 }: {
   label: string;
   picks: AwardPickRow[];
   teamNames: Map<string, string>;
+  goalsByPlayer: Map<string, number>;
 }) {
   const anyScored = picks.some((p) => p.points_awarded !== null);
+
+  // Sort picks descending by goals scored; picks with no goal data sort last.
+  const sorted = [...picks].sort((a, b) => {
+    const aGoals = a.predicted_player_name ? (goalsByPlayer.get(a.predicted_player_name) ?? -1) : -1;
+    const bGoals = b.predicted_player_name ? (goalsByPlayer.get(b.predicted_player_name) ?? -1) : -1;
+    return bGoals - aGoals;
+  });
+
   return (
     <div className="card flex flex-col gap-2 p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
-      {picks.length === 0 ? (
+      {sorted.length === 0 ? (
         <p className="text-xs text-neutral-400">No picks yet</p>
       ) : (
         <ul className="flex flex-col gap-1">
-          {picks.map((pick) => {
+          {sorted.map((pick) => {
             const name = pick.predicted_team_id
               ? (teamNames.get(pick.predicted_team_id) ?? "Unknown team")
               : (pick.predicted_player_name ?? "--");
+            const goals = pick.predicted_player_name
+              ? (goalsByPlayer.get(pick.predicted_player_name) ?? null)
+              : null;
             const scored = pick.points_awarded !== null;
             const correct = scored && (pick.points_awarded ?? 0) > 0;
             return (
@@ -136,8 +149,11 @@ function AwardAccuracyCard({
                   }`}
                 >
                   {name}
-                  {anyScored && correct && " \u2713"}
-                  {anyScored && scored && !correct && " \u2717"}
+                  {goals != null && goals > 0 && (
+                    <span className="ml-1 font-normal text-neutral-400">({goals}g)</span>
+                  )}
+                  {anyScored && correct && " ✓"}
+                  {anyScored && scored && !correct && " ✗"}
                 </span>
               </li>
             );
@@ -147,6 +163,7 @@ function AwardAccuracyCard({
     </div>
   );
 }
+
 
 // \u2500\u2500 Favourites Leaderboard \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -232,7 +249,7 @@ const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
 // \u2500\u2500 Page \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, outcomeAccuracy, ...awardPicksArrays] =
+  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, outcomeAccuracy, topScorers, ...awardPicksArrays] =
     await Promise.all([
       getLeaderboard(),
       getCurrentParticipant(),
@@ -243,12 +260,18 @@ export default async function LeaderboardPage() {
       getTeamNameMap(),
       getAllFavouritePicks(),
       getOutcomeAccuracy(),
+      getTopScorers(),
       ...AWARD_CATEGORIES.map((c) => getAwardPicks(c.key)),
     ]);
 
   const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
 
   const matchById = new Map(matches.map((m) => [m.id, m]));
+
+  // Build player name -> goals map from top_scorers for award card sorting.
+  const goalsByPlayer = new Map<string, number>(
+    (topScorers as Array<{ player_name: string; goals: number }>).map((s) => [s.player_name, s.goals])
+  );
   const stageById = new Map<string, StageLeaderboardRow>();
   for (const r of [...stageLeaderboards.groupStage, ...stageLeaderboards.knockout]) {
     stageById.set(r.participant_id, r);
@@ -413,6 +436,7 @@ export default async function LeaderboardPage() {
               label={cat.label}
               picks={awardPicksArrays[i] as AwardPickRow[]}
               teamNames={teamNames}
+              goalsByPlayer={goalsByPlayer}
             />
           ))}
         </div>

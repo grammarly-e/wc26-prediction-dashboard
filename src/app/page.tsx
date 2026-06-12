@@ -89,13 +89,15 @@ function pickInsightCallouts(
     if (entry.insight.correct_outcome_rate > highest.insight.correct_outcome_rate) highest = entry;
   }
 
+  // Only label a match an upset if fewer than 30% predicted the correct outcome.
+  const UPSET_THRESHOLD = 0.3;
+  const isUpset = lowest.insight.correct_outcome_rate < UPSET_THRESHOLD;
+
   if (lowest.match.id === highest.match.id) {
-    return lowest.insight.correct_outcome_rate < 0.5
-      ? { upset: lowest, bestRead: null }
-      : { upset: null, bestRead: lowest };
+    return isUpset ? { upset: lowest, bestRead: null } : { upset: null, bestRead: lowest };
   }
 
-  return { upset: lowest, bestRead: highest };
+  return { upset: isUpset ? lowest : null, bestRead: highest };
 }
 
 function InsightCard({
@@ -181,8 +183,9 @@ export default async function MatchesPage({
     groupStageMatches.length > 0 && groupStageMatches.every((m) => m.status === "finished");
 
   const liveMatches = allMatches.filter((m) => m.status === "live");
+  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
   const recentResults = allMatches
-    .filter((m) => m.status === "finished")
+    .filter((m) => m.status === "finished" && Date.now() - new Date(m.kickoff_at).getTime() <= TWO_DAYS_MS)
     .sort((a, b) => new Date(b.kickoff_at).getTime() - new Date(a.kickoff_at).getTime())
     .slice(0, 6);
 

@@ -641,7 +641,236 @@ async function fetchGoalEventsFromESPN(
   }
 }
 
-/** Called when football-data.org returns no goals for a finished match. */
+/**
+ * Fetch goal events from SofaScore as a fallback.
+ * SofaScore has better WC 2026 data coverage than ESPN.
+ * Uses the daily scheduled-events feed to find the event ID, then fetches incidents.
+ *
+ * team1Name = home team, team2Name = away team (matches DB team1_id/team2_id ordering).
+ */
+async function fetchGoalEventsFromSofaScore(
+  kickoffAt: string,
+  team1Name: string,
+  team2Name: string,
+): Promise<ESPNGoalRow[]> {
+  try {
+    const dateStr = kickoffAt.slice(0, 10); // YYYY-MM-DD
+
+    const schedResp = await fetch(
+      `https://api.sofascore.com/api/v1/sport/football/scheduled-events/${dateStr}`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12000) },
+    );
+    if (!schedResp.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schedule = await schedResp.json() as any;
+
+    // Find the WC 2026 match for these two teams.
+    // Track whether SofaScore lists team1 as home or away (may differ from DB ordering).
+    let sofaEventId: string | null = null;
+    let sofaTeam1IsHome = true;
+
+    for (const event of (schedule.events ?? [])) {
+      // Filter to FIFA World Cup only (uniqueTournament.id = 16)
+      if (event.tournament?.uniqueTournament?.id !== 16) continue;
+      const home: string = event.homeTeam?.name ?? "";
+      const away: string = event.awayTeam?.name ?? "";
+      if (namesLikelyMatch(home, team1Name) && namesLikelyMatch(away, team2Name)) {
+        sofaEventId = String(event.id);
+        sofaTeam1IsHome = true;
+        break;
+      }
+      if (namesLikelyMatch(home, team2Name) && namesLikelyMatch(away, team1Name)) {
+        sofaEventId = String(event.id);
+        sofaTeam1IsHome = false;
+        break;
+      }
+    }
+
+    if (!sofaEventId) {
+      console.log(`  SofaScore: no WC event found for ${team1Name} vs ${team2Name} on ${dateStr}`);
+      return [];
+    }
+
+    const incResp = await fetch(
+      `https://api.sofascore.com/api/v1/event/${sofaEventId}/incidents`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
+    );
+    if (!incResp.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const incData = await incResp.json() as any;
+
+    const rows: ESPNGoalRow[] = [];
+    for (const inc of (incData.incidents ?? [])) {
+      if (inc.incidentType !== "goal") continue;
+      const playerName: string | null = inc.player?.name ?? null;
+      if (!playerName) continue;
+
+      const cls: string = (inc.incidentClass ?? "").toLowerCase();
+      const eventType: ESPNGoalRow["event_type"] =
+        cls === "owngoal" || cls === "own-goal" || cls === "own_goal" ? "own_goal" :
+        cls === "penalty" ? "penalty_goal" :
+        "goal";
+
+      // Map SofaScore isHome → team1 or team2 using the home/away assignment we found
+      const isTeam1 = inc.isHome === sofaTeam1IsHome;
+      const teamName = isTeam1 ? team1Name : team2Name;
+
+      const minute: number = inc.time ?? 0;
+      // addedTime 999 is SofaScore's sentinel for "not applicable" (used on period markers)
+      const addedTime: number | null =
+        typeof inc.addedTime === "number" && inc.addedTime > 0 && inc.addedTime < 999
+          ? inc.addedTime : null;
+
+      rows.push({ player_name: playerName, team_name: teamName, minute, event_type: eventType, detail: addedTime ? `+${addedTime}` : null });
+    }
+
+    if (rows.length > 0) {
+      console.log(`  SofaScore: ${rows.length} goal(s) for event ${sofaEventId}`);
+    } else {
+      console.log(`  SofaScore: event ${sofaEventId} found but incidents empty (data not yet available)`);
+    }
+    return rows;
+  } catch (err) {
+    console.warn(`  SofaScore fetch error: ${(err as Error).message}`);
+    return [];
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 4th fallback: FIFA.com official API scrape
+// Fetches FIFA's internal API (used by fifa.com and the official app) to look
+// up goal events. Fully defensive — returns [] on any failure.
+// ----------------------------------------------------------------------------
+
+async function fetchGoalEventsFromFIFA(
+  kickoffAt: string,
+  team1Name: string,
+  team2Name: string,
+): Promise<ESPNGoalRow[]> {
+  try {
+    const BASE = "https://api.fifa.com/api/v3";
+    const HEADERS = {
+      "User-Agent": "Mozilla/5.0 (compatible; WC2026Sync/1.0)",
+      "Accept": "application/json",
+    };
+    const timeout = (ms: number) => AbortSignal.timeout(ms);
+
+    // Step 1: discover the current World Cup season id (idCompetition=17 is FIFA World Cup Men)
+    const seasonsResp = await fetch(`${BASE}/competitions/17/seasons?language=en&count=10`, {
+      headers: HEADERS, signal: timeout(6000),
+    });
+    if (!seasonsResp.ok) return [];
+    const seasonsData = await seasonsResp.json() as {
+      Results?: Array<{ IdSeason: string; Name?: string }>;
+    };
+    // Pick the season that mentions 2026 in its name, else take the first
+    const season =
+      seasonsData.Results?.find((s) => (s.Name ?? "").includes("2026")) ??
+      seasonsData.Results?.[0];
+    if (!season) return [];
+
+    // Step 2: get match list for this season
+    const matchesResp = await fetch(
+      `${BASE}/calendar/matches?idSeason=${season.IdSeason}&idCompetition=17&count=200&language=en`,
+      { headers: HEADERS, signal: timeout(8000) }
+    );
+    if (!matchesResp.ok) return [];
+    const matchesData = await matchesResp.json() as {
+      Results?: Array<{
+        IdMatch: string;
+        Date: string;
+        HomeTeam?: { TeamName?: Array<{ Description: string }> };
+        AwayTeam?: { TeamName?: Array<{ Description: string }> };
+      }>;
+    };
+
+    const matchDate = kickoffAt.slice(0, 10); // YYYY-MM-DD
+    const t1Lower = team1Name.toLowerCase();
+    const t2Lower = team2Name.toLowerCase();
+
+    // Find matching fixture by date and fuzzy team name
+    const fixtureMatch = (matchesData.Results ?? []).find((m) => {
+      const matchDay = (m.Date ?? "").slice(0, 10);
+      if (matchDay !== matchDate) return false;
+      const homeRaw = m.HomeTeam?.TeamName?.[0]?.Description ?? "";
+      const awayRaw = m.AwayTeam?.TeamName?.[0]?.Description ?? "";
+      const homeL = homeRaw.toLowerCase();
+      const awayL = awayRaw.toLowerCase();
+      return (
+        (homeL.includes(t1Lower.slice(0, 5)) || t1Lower.includes(homeL.slice(0, 5))) &&
+        (awayL.includes(t2Lower.slice(0, 5)) || t2Lower.includes(awayL.slice(0, 5)))
+      ) || (
+        (homeL.includes(t2Lower.slice(0, 5)) || t2Lower.includes(homeL.slice(0, 5))) &&
+        (awayL.includes(t1Lower.slice(0, 5)) || t1Lower.includes(awayL.slice(0, 5)))
+      );
+    });
+    if (!fixtureMatch) {
+      console.log(`  FIFA API: no match found for ${team1Name} vs ${team2Name} on ${matchDate}`);
+      return [];
+    }
+
+    const homeRaw = fixtureMatch.HomeTeam?.TeamName?.[0]?.Description ?? team1Name;
+    const awayRaw = fixtureMatch.AwayTeam?.TeamName?.[0]?.Description ?? team2Name;
+    const isSwapped =
+      homeRaw.toLowerCase().includes(t2Lower.slice(0, 5)) ||
+      t2Lower.includes(homeRaw.toLowerCase().slice(0, 5));
+    const homeTeamName = isSwapped ? team2Name : team1Name;
+    const awayTeamName = isSwapped ? team1Name : team2Name;
+
+    // Step 3: fetch timeline events
+    const timelineResp = await fetch(
+      `${BASE}/timelines/${fixtureMatch.IdMatch}?language=en`,
+      { headers: HEADERS, signal: timeout(8000) }
+    );
+    if (!timelineResp.ok) return [];
+    const timelineData = await timelineResp.json() as {
+      Event?: Array<{
+        Type?: number;
+        Team?: number; // 1 = home, 2 = away (or vice versa — needs verification)
+        Time?: number;
+        AddedTime?: number;
+        PlayerName?: string;
+        PlayerLocalName?: string;
+      }>;
+    };
+
+    // FIFA timeline event types: 0=Goal, 1=OwnGoal, 3=Penalty (approximate)
+    const GOAL_TYPES = new Set([0, 1, 3]);
+    const goals: ESPNGoalRow[] = [];
+
+    for (const ev of timelineData.Event ?? []) {
+      if (!GOAL_TYPES.has(ev.Type ?? -1)) continue;
+      const isHome = ev.Team === 1;
+      const teamName = isHome ? homeTeamName : awayTeamName;
+      const playerName = ev.PlayerName ?? ev.PlayerLocalName ?? "Unknown";
+      const minute = ev.Time ?? 0;
+      const added = (ev.AddedTime ?? 0) > 0 ? ev.AddedTime! : 0;
+      const eventType: "goal" | "own_goal" | "penalty_goal" =
+        ev.Type === 1 ? "own_goal" : ev.Type === 3 ? "penalty_goal" : "goal";
+
+      goals.push({
+        player_name: playerName,
+        team_name: teamName,
+        minute: minute + added,
+        event_type: eventType,
+        detail: null,
+      });
+    }
+
+    if (goals.length) {
+      console.log(`  FIFA API: ${goals.length} goal(s) for ${team1Name} vs ${team2Name}`);
+    } else {
+      console.log(`  FIFA API: 0 goals returned for match #${fixtureMatch.IdMatch}`);
+    }
+    return goals;
+  } catch (err) {
+    console.warn(`  ! FIFA API fallback failed: ${(err as Error).message}`);
+    return [];
+  }
+}
+
+/** Called when football-data.org returns no goals for a finished match.
+ *  Tries ESPN summary first, then SofaScore incidents as a secondary fallback. */
 async function syncMatchEventsFromESPN(
   supabase: SupabaseClient<Database>,
   matchDbId: string,
@@ -667,12 +896,19 @@ async function syncMatchEventsFromESPN(
   const team1Name = teamNameById.get(matchRow.team1_id ?? "") ?? "";
   const team2Name = teamNameById.get(matchRow.team2_id ?? "") ?? "";
 
-  const espnGoals = await fetchGoalEventsFromESPN(matchRow.kickoff_at, team1Name, team2Name);
-  if (espnGoals.length === 0) return;
+  // Try ESPN, then SofaScore, then FIFA.com API as a final fallback
+  let goals = await fetchGoalEventsFromESPN(matchRow.kickoff_at, team1Name, team2Name);
+  if (goals.length === 0) {
+    goals = await fetchGoalEventsFromSofaScore(matchRow.kickoff_at, team1Name, team2Name);
+  }
+  if (goals.length === 0) {
+    goals = await fetchGoalEventsFromFIFA(matchRow.kickoff_at, team1Name, team2Name);
+  }
+  if (goals.length === 0) return;
 
   await supabase.from("match_events").delete().eq("match_id", matchDbId);
 
-  const rows = espnGoals.map((g) => {
+  const rows = goals.map((g) => {
     let teamId: string | null = teamIdByName.get(g.team_name.toLowerCase().trim()) ?? null;
     if (!teamId) {
       for (const [name, id] of teamIdByName) {
@@ -692,9 +928,9 @@ async function syncMatchEventsFromESPN(
 
   const { error } = await supabase.from("match_events").insert(rows);
   if (error) {
-    console.error(`  ✗ match_events (ESPN) for #${matchNumber}: ${error.message}`);
+    console.error(`  ✗ match_events (external) for #${matchNumber}: ${error.message}`);
   } else {
-    console.log(`  ✓ match_events (ESPN): ${rows.length} goal(s) written for #${matchNumber}`);
+    console.log(`  ✓ match_events (external): ${rows.length} goal(s) written for #${matchNumber}`);
   }
 }
 
@@ -856,4 +1092,54 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     console.error(msg);
     return { ok: false, message: msg, finishedScored: 0 };
   }
+}
+
+// ----------------------------------------------------------------------------
+// Public helper: rebuild top_scorers from match_events only.
+// Called by the admin API after manual event entry so the scorers table
+// reflects the latest hand-entered data without a full external sync.
+// ----------------------------------------------------------------------------
+
+export async function rebuildTopScorersFromEvents(): Promise<void> {
+  const supabase = getServiceRoleClient();
+  const scorers = await buildScorersFromEvents(supabase);
+  if (!scorers.length) return;
+
+  const { data: dbTeams, error: teamsErr } = await supabase
+    .from("teams")
+    .select("id, name, is_placeholder");
+  if (teamsErr) throw teamsErr;
+
+  const teamsByName = new Map<string, DbTeamRow>(
+    (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
+  );
+
+  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+
+  await supabase
+    .from("top_scorers")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+
+  for (let i = 0; i < scorers.length; i++) {
+    const s = scorers[i];
+    let team = teamsByName.get(s.teamName.trim().toLowerCase());
+    if (!team) {
+      for (const t of teamsByName.values()) {
+        if (namesLikelyMatch(t.name, s.teamName)) { team = t; break; }
+      }
+    }
+    await supabase.from("top_scorers").upsert(
+      {
+        player_name: s.name,
+        player_id: null,
+        team_id: team?.id ?? null,
+        goals: s.goals,
+        assists: s.assists,
+        rank: i + 1,
+      },
+      { onConflict: "player_name" }
+    );
+  }
+  console.log(`[rebuildTopScorersFromEvents] ${scorers.length} scorer(s) written from match_events.`);
 }

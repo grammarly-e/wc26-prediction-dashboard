@@ -22,6 +22,12 @@ const STATUS_OPTIONS: MatchStatus[] = [
   "cancelled",
 ];
 
+const EVENT_TYPE_OPTIONS: Array<{ value: "goal" | "own_goal" | "penalty_goal"; label: string }> = [
+  { value: "goal", label: "Goal" },
+  { value: "own_goal", label: "Own Goal" },
+  { value: "penalty_goal", label: "Penalty" },
+];
+
 export interface ParticipantRow {
   id: string;
   display_name: string;
@@ -33,6 +39,22 @@ interface EditState {
   homeScore: string;
   awayScore: string;
   status: MatchStatus;
+}
+
+interface MatchEventRow {
+  id: string;
+  team_id: string | null;
+  player_name: string | null;
+  minute: number;
+  event_type: string;
+  detail: string | null;
+}
+
+interface AddEventState {
+  playerName: string;
+  teamSide: "home" | "away";
+  minute: string;
+  eventType: "goal" | "own_goal" | "penalty_goal";
 }
 
 export default function AdminDashboard({
@@ -54,6 +76,19 @@ export default function AdminDashboard({
     status: "scheduled",
   });
   const [saving, setSaving] = useState(false);
+
+  // Events panel state
+  const [eventsMatchId, setEventsMatchId] = useState<string | null>(null);
+  const [eventsCache, setEventsCache] = useState<Map<string, MatchEventRow[]>>(new Map());
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
+  const [addingEvent, setAddingEvent] = useState(false);
+  const [addEventState, setAddEventState] = useState<AddEventState>({
+    playerName: "",
+    teamSide: "home",
+    minute: "",
+    eventType: "goal",
+  });
 
   // Sync state
   const [syncing, setSyncing] = useState(false);
@@ -111,6 +146,82 @@ export default function AdminDashboard({
     }
   }
 
+  async function toggleEventsPanel(match: Match) {
+    if (eventsMatchId === match.id) {
+      setEventsMatchId(null);
+      return;
+    }
+    setEventsMatchId(match.id);
+    if (eventsCache.has(match.id)) return;
+    setLoadingEvents(true);
+    try {
+      const res = await fetch(`/api/admin/match-events?matchId=${match.id}`);
+      const body = await res.json() as { events?: MatchEventRow[]; error?: string };
+      if (res.ok) {
+        setEventsCache((prev) => new Map(prev).set(match.id, body.events ?? []));
+      } else {
+        alert("Failed to load events: " + (body.error ?? "unknown"));
+        setEventsMatchId(null);
+      }
+    } finally {
+      setLoadingEvents(false);
+    }
+  }
+
+  async function addEvent(match: Match) {
+    if (!addEventState.playerName.trim() || !addEventState.minute) return;
+    const teamId = addEventState.teamSide === "home" ? match.team1_id : match.team2_id;
+    setAddingEvent(true);
+    const res = await fetch("/api/admin/match-events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        matchId: match.id,
+        teamId,
+        playerName: addEventState.playerName.trim(),
+        minute: parseInt(addEventState.minute, 10),
+        eventType: addEventState.eventType,
+        detail: null,
+      }),
+    });
+    setAddingEvent(false);
+    if (res.ok) {
+      setAddEventState({ playerName: "", teamSide: "home", minute: "", eventType: "goal" });
+      // Refresh events for this match
+      const refresh = await fetch(`/api/admin/match-events?matchId=${match.id}`);
+      const body = await refresh.json() as { events?: MatchEventRow[] };
+      if (refresh.ok) {
+        setEventsCache((prev) => new Map(prev).set(match.id, body.events ?? []));
+      }
+      startTransition(() => router.refresh());
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
+  async function deleteEvent(eventId: string, matchId: string) {
+    setDeletingEventId(eventId);
+    const res = await fetch("/api/admin/match-events", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventId }),
+    });
+    setDeletingEventId(null);
+    if (res.ok) {
+      setEventsCache((prev) => {
+        const updated = new Map(prev);
+        const list = updated.get(matchId) ?? [];
+        updated.set(matchId, list.filter((e) => e.id !== eventId));
+        return updated;
+      });
+      startTransition(() => router.refresh());
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error deleting event: " + (body.error ?? "unknown"));
+    }
+  }
+
   async function runSync() {
     setSyncing(true);
     setSyncResult(null);
@@ -163,6 +274,11 @@ export default function AdminDashboard({
   async function logout() {
     await fetch("/api/admin/logout", { method: "POST" });
     startTransition(() => router.refresh());
+  }
+
+  function eventLabel(e: MatchEventRow): string {
+    const icon = e.event_type === "own_goal" ? "OG" : e.event_type === "penalty_goal" ? "P" : "";
+    return `${e.minute}'  ${e.player_name ?? "Unknown"}${icon ? " (" + icon + ")" : ""}`;
   }
 
   return (
@@ -236,102 +352,213 @@ export default function AdminDashboard({
                 </h2>
                 <div className="flex flex-col gap-1.5">
                   {roundMatches.map((m) => (
-                    <div
-                      key={m.id}
-                      className="card flex flex-wrap items-center gap-3 px-3 py-2.5"
-                    >
-                      {/* Match identity */}
-                      <span className="w-7 shrink-0 text-xs text-neutral-400">
-                        #{m.match_number}
-                      </span>
-                      <span className="flex-1 truncate text-sm font-medium">
-                        {m.team1_code} vs {m.team2_code}
-                      </span>
-
-                      {/* Current result */}
-                      {m.status === "finished" && m.home_score != null ? (
-                        <span className="font-mono text-sm font-bold text-pitch">
-                          {m.home_score}-{m.away_score}
+                    <div key={m.id} className="card overflow-hidden">
+                      {/* Match row */}
+                      <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                        {/* Match identity */}
+                        <span className="w-7 shrink-0 text-xs text-neutral-400">
+                          #{m.match_number}
                         </span>
-                      ) : null}
+                        <span className="flex-1 truncate text-sm font-medium">
+                          {m.team1_code} vs {m.team2_code}
+                        </span>
 
-                      <span
-                        className={`badge text-xs ${
-                          m.status === "finished"
-                            ? "bg-neutral-100 text-neutral-500"
-                            : m.status === "live"
-                            ? "bg-red-100 text-red-700"
-                            : m.status === "scheduled"
-                            ? "bg-sky-50 text-sky-700"
-                            : "bg-yellow-50 text-yellow-700"
-                        }`}
-                      >
-                        {m.status}
-                      </span>
+                        {/* Current result */}
+                        {m.status === "finished" && m.home_score != null ? (
+                          <span className="font-mono text-sm font-bold text-pitch">
+                            {m.home_score}-{m.away_score}
+                          </span>
+                        ) : null}
 
-                      {/* Edit form or button */}
-                      {editingId === m.id ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="number"
-                            min={0}
-                            max={99}
-                            value={editState.homeScore}
-                            onChange={(e) =>
-                              setEditState((s) => ({ ...s, homeScore: e.target.value }))
-                            }
-                            placeholder="H"
-                            className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
-                          />
-                          <span className="text-neutral-400">-</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={99}
-                            value={editState.awayScore}
-                            onChange={(e) =>
-                              setEditState((s) => ({ ...s, awayScore: e.target.value }))
-                            }
-                            placeholder="A"
-                            className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
-                          />
-                          <select
-                            value={editState.status}
-                            onChange={(e) =>
-                              setEditState((s) => ({
-                                ...s,
-                                status: e.target.value as MatchStatus,
-                              }))
-                            }
-                            className="rounded border border-neutral-200 px-2 py-1 text-xs"
-                          >
-                            {STATUS_OPTIONS.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => saveMatch(m.id)}
-                            disabled={saving}
-                            className="rounded bg-pitch px-3 py-1 text-xs font-semibold text-gold disabled:opacity-50"
-                          >
-                            {saving ? "..." : "Save"}
-                          </button>
-                          <button
-                            onClick={() => setEditingId(null)}
-                            className="text-xs text-neutral-400 hover:text-neutral-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => startEdit(m)}
-                          className="rounded px-3 py-1 text-xs font-semibold text-neutral-500 hover:bg-neutral-100"
+                        <span
+                          className={`badge text-xs ${
+                            m.status === "finished"
+                              ? "bg-neutral-100 text-neutral-500"
+                              : m.status === "live"
+                              ? "bg-red-100 text-red-700"
+                              : m.status === "scheduled"
+                              ? "bg-sky-50 text-sky-700"
+                              : "bg-yellow-50 text-yellow-700"
+                          }`}
                         >
-                          Edit
-                        </button>
+                          {m.status}
+                        </span>
+
+                        {/* Events toggle (only when score known) */}
+                        {m.home_score != null && (
+                          <button
+                            onClick={() => toggleEventsPanel(m)}
+                            className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+                              eventsMatchId === m.id
+                                ? "bg-pitch text-gold"
+                                : "text-neutral-500 hover:bg-neutral-100"
+                            }`}
+                          >
+                            ⚽ Events
+                          </button>
+                        )}
+
+                        {/* Edit form or button */}
+                        {editingId === m.id ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="number"
+                              min={0}
+                              max={99}
+                              value={editState.homeScore}
+                              onChange={(e) =>
+                                setEditState((s) => ({ ...s, homeScore: e.target.value }))
+                              }
+                              placeholder="H"
+                              className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
+                            />
+                            <span className="text-neutral-400">-</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={99}
+                              value={editState.awayScore}
+                              onChange={(e) =>
+                                setEditState((s) => ({ ...s, awayScore: e.target.value }))
+                              }
+                              placeholder="A"
+                              className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
+                            />
+                            <select
+                              value={editState.status}
+                              onChange={(e) =>
+                                setEditState((s) => ({
+                                  ...s,
+                                  status: e.target.value as MatchStatus,
+                                }))
+                              }
+                              className="rounded border border-neutral-200 px-2 py-1 text-xs"
+                            >
+                              {STATUS_OPTIONS.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => saveMatch(m.id)}
+                              disabled={saving}
+                              className="rounded bg-pitch px-3 py-1 text-xs font-semibold text-gold disabled:opacity-50"
+                            >
+                              {saving ? "..." : "Save"}
+                            </button>
+                            <button
+                              onClick={() => setEditingId(null)}
+                              className="text-xs text-neutral-400 hover:text-neutral-600"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => startEdit(m)}
+                            className="rounded px-3 py-1 text-xs font-semibold text-neutral-500 hover:bg-neutral-100"
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Events panel */}
+                      {eventsMatchId === m.id && (
+                        <div className="border-t border-neutral-100 bg-neutral-50 px-4 py-3">
+                          {loadingEvents && !eventsCache.has(m.id) ? (
+                            <p className="text-xs text-neutral-400">Loading events...</p>
+                          ) : (
+                            <>
+                              {/* Existing events list */}
+                              <div className="mb-3 flex flex-col gap-1">
+                                {(eventsCache.get(m.id) ?? []).length === 0 ? (
+                                  <p className="text-xs text-neutral-400">No events recorded yet.</p>
+                                ) : (
+                                  (eventsCache.get(m.id) ?? []).map((e) => (
+                                    <div key={e.id} className="flex items-center justify-between gap-2">
+                                      <span className="text-xs text-neutral-700">
+                                        ⚽ {eventLabel(e)}
+                                      </span>
+                                      <button
+                                        onClick={() => deleteEvent(e.id, m.id)}
+                                        disabled={deletingEventId === e.id}
+                                        className="text-xs text-red-400 hover:text-red-600 disabled:opacity-50"
+                                      >
+                                        {deletingEventId === e.id ? "..." : "Remove"}
+                                      </button>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+
+                              {/* Add event form */}
+                              <div className="flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-3">
+                                <input
+                                  type="text"
+                                  placeholder="Player name"
+                                  value={addEventState.playerName}
+                                  onChange={(e) =>
+                                    setAddEventState((s) => ({ ...s, playerName: e.target.value }))
+                                  }
+                                  className="min-w-0 flex-1 rounded border border-neutral-200 px-2 py-1 text-xs"
+                                />
+                                <select
+                                  value={addEventState.teamSide}
+                                  onChange={(e) =>
+                                    setAddEventState((s) => ({
+                                      ...s,
+                                      teamSide: e.target.value as "home" | "away",
+                                    }))
+                                  }
+                                  className="rounded border border-neutral-200 px-2 py-1 text-xs"
+                                >
+                                  <option value="home">Home ({m.team1_code})</option>
+                                  <option value="away">Away ({m.team2_code})</option>
+                                </select>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={120}
+                                  placeholder="Min"
+                                  value={addEventState.minute}
+                                  onChange={(e) =>
+                                    setAddEventState((s) => ({ ...s, minute: e.target.value }))
+                                  }
+                                  className="w-16 rounded border border-neutral-200 px-2 py-1 text-center text-xs"
+                                />
+                                <select
+                                  value={addEventState.eventType}
+                                  onChange={(e) =>
+                                    setAddEventState((s) => ({
+                                      ...s,
+                                      eventType: e.target.value as "goal" | "own_goal" | "penalty_goal",
+                                    }))
+                                  }
+                                  className="rounded border border-neutral-200 px-2 py-1 text-xs"
+                                >
+                                  {EVENT_TYPE_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  onClick={() => addEvent(m)}
+                                  disabled={
+                                    addingEvent ||
+                                    !addEventState.playerName.trim() ||
+                                    !addEventState.minute
+                                  }
+                                  className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                  {addingEvent ? "..." : "Add"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
