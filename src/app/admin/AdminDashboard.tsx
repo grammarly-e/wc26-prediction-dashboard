@@ -94,6 +94,10 @@ export default function AdminDashboard({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
+  // Debug scorers state
+  const [debuggingScorers, setDebuggingScorers] = useState(false);
+  const [debugScorersResult, setDebugScorersResult] = useState<string | null>(null);
+
   // Recompute state
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeResult, setRecomputeResult] = useState<string | null>(null);
@@ -243,6 +247,32 @@ export default function AdminDashboard({
     }
   }
 
+  async function runDebugScorers() {
+    setDebuggingScorers(true);
+    setDebugScorersResult(null);
+    const res = await fetch("/api/admin/debug-scorers");
+    setDebuggingScorers(false);
+    if (res.ok) {
+      const body = await res.json() as Record<string, unknown>;
+      const lines = [
+        `match_events total: ${body.match_events_total}`,
+        `goal events: ${body.goal_events_count}${body.goal_events_error ? ` (ERR: ${body.goal_events_error})` : ""}`,
+        `top_scorers rows: ${body.top_scorers_count}${body.top_scorers_error ? ` (ERR: ${body.top_scorers_error})` : ""}`,
+        `test write: ${body.test_insert_ok ? "OK" : `FAILED — ${body.test_insert_error}`}`,
+      ];
+      if (body.goal_events_sample && Array.isArray(body.goal_events_sample) && body.goal_events_sample.length) {
+        lines.push("goal events: " + JSON.stringify(body.goal_events_sample));
+      }
+      if (body.top_scorers_rows && Array.isArray(body.top_scorers_rows) && body.top_scorers_rows.length) {
+        lines.push("scorers: " + JSON.stringify(body.top_scorers_rows));
+      }
+      setDebugScorersResult(lines.join(" | "));
+    } else {
+      const body = await res.json() as { error?: string };
+      setDebugScorersResult("Debug error: " + (body.error ?? "unknown"));
+    }
+  }
+
   async function runRecompute() {
     setRecomputing(true);
     setRecomputeResult(null);
@@ -299,6 +329,9 @@ export default function AdminDashboard({
           {syncResult && (
             <span className="text-xs text-neutral-500">{syncResult}</span>
           )}
+          {debugScorersResult && (
+            <span className="break-all text-xs text-amber-700">{debugScorersResult}</span>
+          )}
           <button
             onClick={runRecompute}
             disabled={recomputing}
@@ -312,6 +345,13 @@ export default function AdminDashboard({
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
           >
             {syncing ? "Syncing..." : "Sync & Score"}
+          </button>
+          <button
+            onClick={runDebugScorers}
+            disabled={debuggingScorers}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+          >
+            {debuggingScorers ? "Checking..." : "Debug Scorers"}
           </button>
           <button
             onClick={logout}

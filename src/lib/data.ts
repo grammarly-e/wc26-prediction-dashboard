@@ -190,7 +190,13 @@ export interface ScorerRow extends TopScorer {
   team_name: string | null;
 }
 
-/** Golden Boot race, ranked. */
+/** Golden Boot race, ranked.
+ *
+ * Primary source: top_scorers table (populated by sync job + admin rebuilds).
+ * Fallback: aggregate goals directly from match_events. This ensures that
+ * admin-entered match events always appear on the scorers page, even if the
+ * top_scorers write step failed for any reason.
+ */
 export async function getTopScorers(): Promise<ScorerRow[]> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -199,9 +205,52 @@ export async function getTopScorers(): Promise<ScorerRow[]> {
     .order("rank", { ascending: true, nullsFirst: false });
   if (error) throw error;
 
-  return (data as Array<TopScorer & { teams: { name: string } | null }>).map(({ teams, ...rest }) => ({
+  const rows = (data as Array<TopScorer & { teams: { name: string } | null }>).map(({ teams, ...rest }) => ({
     ...rest,
     team_name: teams?.name ?? null,
+  }));
+
+  // If top_scorers has data, use it directly.
+  if (rows.length > 0) return rows;
+
+  // Fallback: compute directly from match_events so admin-entered goals are
+  // never silently lost due to a failed write to top_scorers.
+  const { data: events, error: evErr } = await supabase
+    .from("match_events")
+    .select("player_name, team_id, event_type")
+    .in("event_type", ["goal", "penalty_goal"])
+    .not("player_name", "is", null);
+
+  if (evErr || !events?.length) return [];
+
+  // Build team name map.
+  const { data: teams } = await supabase.from("teams").select("id, name");
+  const teamNameById = new Map<string, string>(
+    ((teams ?? []) as { id: string; name: string }[]).map((t) => [t.id, t.name])
+  );
+
+  const counts = new Map<string, { goals: number; teamId: string | null; teamName: string | null }>();
+  for (const ev of events as { player_name: string | null; team_id: string | null; event_type: string }[]) {
+    if (!ev.player_name) continue;
+    const prev = counts.get(ev.player_name) ?? { goals: 0, teamId: ev.team_id, teamName: ev.team_id ? (teamNameById.get(ev.team_id) ?? null) : null };
+    prev.goals += 1;
+    counts.set(ev.player_name, prev);
+  }
+
+  const fallback = Array.from(counts.entries())
+    .map(([name, { goals, teamId, teamName }]) => ({ name, goals, teamId, teamName }))
+    .sort((a, b) => b.goals - a.goals);
+
+  return fallback.map((s, i) => ({
+    id: `fallback-${i}`,
+    player_id: null,
+    player_name: s.name,
+    team_id: s.teamId ?? null,
+    team_name: s.teamName ?? null,
+    goals: s.goals,
+    assists: 0,
+    rank: i + 1,
+    updated_at: new Date().toISOString(),
   }));
 }
 
