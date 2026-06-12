@@ -10,10 +10,9 @@ function isAuthenticated(): boolean {
 
 /**
  * Rebuild top_scorers directly from match_events.
- * Inlined here so it uses the same createServiceRoleClient as the rest of
- * this route — no dependency on sync.ts internals.
+ * Returns null on success, or an error message string on failure.
  */
-async function rebuildTopScorers(): Promise<void> {
+async function rebuildTopScorers(): Promise<string | null> {
   const supabase = createServiceRoleClient();
 
   const { data: events, error: evErr } = await supabase
@@ -23,13 +22,22 @@ async function rebuildTopScorers(): Promise<void> {
     .not("player_name", "is", null);
 
   if (evErr) {
-    console.error("[rebuildTopScorers] query failed:", evErr.message);
-    return;
+    const msg = `[rebuildTopScorers] query failed: ${evErr.message}`;
+    console.error(msg);
+    return msg;
   }
 
   if (!events?.length) {
-    await supabase.from("top_scorers").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-    return;
+    const { error: clrErr } = await supabase
+      .from("top_scorers")
+      .delete()
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+    if (clrErr) {
+      const msg = `[rebuildTopScorers] clear failed: ${clrErr.message}`;
+      console.error(msg);
+      return msg;
+    }
+    return null;
   }
 
   const counts = new Map<string, { goals: number; teamId: string | null }>();
@@ -49,10 +57,12 @@ async function rebuildTopScorers(): Promise<void> {
     .delete()
     .neq("id", "00000000-0000-0000-0000-000000000000");
   if (delErr) {
-    console.error("[rebuildTopScorers] delete failed:", delErr.message);
-    return;
+    const msg = `[rebuildTopScorers] delete failed: ${delErr.message}`;
+    console.error(msg);
+    return msg;
   }
 
+  const insertErrors: string[] = [];
   for (let i = 0; i < scorers.length; i++) {
     const s = scorers[i];
     const { error: insErr } = await supabase.from("top_scorers").insert({
@@ -63,9 +73,19 @@ async function rebuildTopScorers(): Promise<void> {
       assists: 0,
       rank: i + 1,
     });
-    if (insErr) console.error("[rebuildTopScorers] insert " + s.name + ": " + insErr.message);
+    if (insErr) {
+      const msg = `${s.name}: ${insErr.message}`;
+      console.error(`[rebuildTopScorers] insert failed — ${msg}`);
+      insertErrors.push(msg);
+    }
   }
-  console.log("[rebuildTopScorers] wrote " + scorers.length + " scorer(s) from match_events");
+
+  if (insertErrors.length) {
+    return `top_scorers insert failed for ${insertErrors.length} row(s): ${insertErrors.join("; ")}`;
+  }
+
+  console.log(`[rebuildTopScorers] wrote ${scorers.length} scorer(s) from match_events`);
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -121,7 +141,10 @@ export async function POST(request: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  await rebuildTopScorers();
+  const rebuildError = await rebuildTopScorers();
+  if (rebuildError) {
+    return NextResponse.json({ ok: true, rebuildWarning: rebuildError });
+  }
 
   return NextResponse.json({ ok: true });
 }
@@ -144,7 +167,10 @@ export async function DELETE(request: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  await rebuildTopScorers();
+  const rebuildError = await rebuildTopScorers();
+  if (rebuildError) {
+    return NextResponse.json({ ok: true, rebuildWarning: rebuildError });
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -185,17 +185,20 @@ export default function AdminDashboard({
       }),
     });
     setAddingEvent(false);
+    const body = await res.json() as { ok?: boolean; error?: string; rebuildWarning?: string };
     if (res.ok) {
+      if (body.rebuildWarning) {
+        alert("Event saved, but scorer rebuild failed:\n" + body.rebuildWarning);
+      }
       setAddEventState({ playerName: "", teamSide: "home", minute: "", eventType: "goal" });
       // Refresh events for this match
       const refresh = await fetch(`/api/admin/match-events?matchId=${match.id}`);
-      const body = await refresh.json() as { events?: MatchEventRow[] };
+      const refreshBody = await refresh.json() as { events?: MatchEventRow[] };
       if (refresh.ok) {
-        setEventsCache((prev) => new Map(prev).set(match.id, body.events ?? []));
+        setEventsCache((prev) => new Map(prev).set(match.id, refreshBody.events ?? []));
       }
       startTransition(() => router.refresh());
     } else {
-      const body = await res.json() as { error?: string };
       alert("Error: " + (body.error ?? "unknown"));
     }
   }
@@ -208,7 +211,11 @@ export default function AdminDashboard({
       body: JSON.stringify({ eventId }),
     });
     setDeletingEventId(null);
+    const body = await res.json() as { ok?: boolean; error?: string; rebuildWarning?: string };
     if (res.ok) {
+      if (body.rebuildWarning) {
+        alert("Event removed, but scorer rebuild failed:\n" + body.rebuildWarning);
+      }
       setEventsCache((prev) => {
         const updated = new Map(prev);
         const list = updated.get(matchId) ?? [];
@@ -217,7 +224,6 @@ export default function AdminDashboard({
       });
       startTransition(() => router.refresh());
     } else {
-      const body = await res.json() as { error?: string };
       alert("Error deleting event: " + (body.error ?? "unknown"));
     }
   }

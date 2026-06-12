@@ -492,12 +492,13 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
 
   scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
 
-  // Clear stale rows before re-writing: the provider may return fewer than
-  // the previous set (e.g. corrected data), and we want the table to always
-  // reflect exactly what the provider currently says, ranked from scratch.
-  await supabase.from("top_scorers").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  const { error: delErr } = await supabase
+    .from("top_scorers")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (delErr) throw new Error(`top_scorers delete failed: ${delErr.message}`);
 
-  let written = 0;
+  const insertErrors: string[] = [];
   for (let i = 0; i < scorers.length; i++) {
     const s = scorers[i];
     let team = teamsByName.get(s.teamName.trim().toLowerCase());
@@ -510,22 +511,22 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
       }
     }
 
-    const { error } = await supabase.from("top_scorers").upsert(
-      {
-        player_name: s.name,
-        player_id: null,
-        team_id: team?.id ?? null,
-        goals: s.goals,
-        assists: s.assists,
-        rank: i + 1,
-      },
-      { onConflict: "player_name" }
-    );
+    const { error } = await supabase.from("top_scorers").insert({
+      player_name: s.name,
+      player_id: null,
+      team_id: team?.id ?? null,
+      goals: s.goals,
+      assists: s.assists,
+      rank: i + 1,
+    });
 
-    if (error) console.error(`  ✗ Scorer ${s.name}: ${error.message}`);
-    else written++;
+    if (error) insertErrors.push(`${s.name}: ${error.message}`);
   }
-  console.log(`Scorers: ${written} rows upserted.`);
+
+  if (insertErrors.length) {
+    throw new Error(`top_scorers insert failed for ${insertErrors.length} row(s):\n${insertErrors.join("\n")}`);
+  }
+  console.log(`Scorers: ${scorers.length} row(s) written.`);
 }
 
 
@@ -1134,11 +1135,13 @@ export async function rebuildTopScorersFromEvents(): Promise<void> {
 
   scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
 
-  await supabase
+  const { error: delErr } = await supabase
     .from("top_scorers")
     .delete()
     .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (delErr) throw new Error(`[rebuildTopScorersFromEvents] delete failed: ${delErr.message}`);
 
+  const insertErrors: string[] = [];
   for (let i = 0; i < scorers.length; i++) {
     const s = scorers[i];
     let team = teamsByName.get(s.teamName.trim().toLowerCase());
@@ -1147,17 +1150,19 @@ export async function rebuildTopScorersFromEvents(): Promise<void> {
         if (namesLikelyMatch(t.name, s.teamName)) { team = t; break; }
       }
     }
-    await supabase.from("top_scorers").upsert(
-      {
-        player_name: s.name,
-        player_id: null,
-        team_id: team?.id ?? null,
-        goals: s.goals,
-        assists: s.assists,
-        rank: i + 1,
-      },
-      { onConflict: "player_name" }
-    );
+    const { error: insErr } = await supabase.from("top_scorers").insert({
+      player_name: s.name,
+      player_id: null,
+      team_id: team?.id ?? null,
+      goals: s.goals,
+      assists: s.assists,
+      rank: i + 1,
+    });
+    if (insErr) insertErrors.push(`${s.name}: ${insErr.message}`);
+  }
+
+  if (insertErrors.length) {
+    throw new Error(`[rebuildTopScorersFromEvents] insert failed for ${insertErrors.length} row(s):\n${insertErrors.join("\n")}`);
   }
   console.log(`[rebuildTopScorersFromEvents] ${scorers.length} scorer(s) written from match_events.`);
 }
