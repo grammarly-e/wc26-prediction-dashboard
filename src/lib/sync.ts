@@ -454,16 +454,34 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
     }
   }
 
-  // Fallback 2: aggregate from our own match_events table.
-  // Works as soon as syncMatchEvents has run for at least one match with goals.
-  if (!scorers.length) {
-    scorers = await buildScorersFromEvents(supabase);
-    if (scorers.length) {
-      console.log(`  match_events fallback: ${scorers.length} scorers.`);
+  // Always merge with match_events: picks up any goals that external APIs
+  // missed (e.g. manually-entered admin events) and fills gaps where
+  // external APIs returned no data at all.
+  const eventScorers = await buildScorersFromEvents(supabase);
+  if (eventScorers.length) {
+    if (!scorers.length) {
+      // No external data at all — use match_events as the sole source.
+      scorers = eventScorers;
+      console.log(`  match_events only: ${scorers.length} scorer(s).`);
     } else {
-      console.log("  No scorer data yet from any source.");
-      return;
+      // Merge: for each player in match_events, use the higher goal count
+      // between the two sources (external APIs may lag or mis-count).
+      const byName = new Map(scorers.map((s) => [s.name.toLowerCase(), s]));
+      for (const ev of eventScorers) {
+        const key = ev.name.toLowerCase();
+        const existing = byName.get(key);
+        if (!existing) {
+          // Player present in match_events but not in external API — add them.
+          scorers.push(ev);
+        } else if (ev.goals > existing.goals) {
+          existing.goals = ev.goals;
+        }
+      }
+      console.log(`  merged with match_events: ${scorers.length} scorer(s) total.`);
     }
+  } else if (!scorers.length) {
+    console.log("  No scorer data yet from any source.");
+    return;
   }
 
   const { data: dbTeams, error: teamsErr } = await supabase.from("teams").select("id, name, is_placeholder");
