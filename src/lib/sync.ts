@@ -524,6 +524,53 @@ interface ESPNGoalRow {
   detail: string | null;
 }
 
+/**
+ * Parse goal rows from an ESPN keyEvents or scoringPlays array.
+ * Defensive against field name variants and missing participant type text.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseGoalsFromKeyEvents(events: any[]): ESPNGoalRow[] {
+  const rows: ESPNGoalRow[] = [];
+  for (const evt of events) {
+    // Accept both "type.text" and top-level "typeText" (different ESPN endpoints)
+    const typeText: string = (evt.type?.text ?? evt.typeText ?? "").toLowerCase();
+    if (!typeText.includes("goal")) continue;
+
+    // Parse "23'" or "45+2'" into base minute and optional injury-time suffix
+    const displayValue: string = evt.clock?.displayValue ?? evt.clockDisplay ?? "";
+    const minuteMatch = displayValue.match(/^(\d+)(?:\+(\d+))?/);
+    const minute = minuteMatch ? parseInt(minuteMatch[1]) : 0;
+    const injuryTime = minuteMatch?.[2] ? parseInt(minuteMatch[2]) : null;
+
+    const participants: Array<{
+      athlete?: { displayName?: string };
+      type?: { text?: string };
+    }> = evt.participants ?? [];
+
+    // Prefer an explicit "scorer" participant, fall back to first in the list.
+    // ESPN sometimes uses "Scorer", "Goal Scorer", or no type text at all.
+    const scorerEntry =
+      participants.find((p) => (p.type?.text ?? "").toLowerCase().includes("scorer")) ??
+      participants[0];
+    const playerName = scorerEntry?.athlete?.displayName ?? null;
+    if (!playerName) continue;
+
+    const eventType: ESPNGoalRow["event_type"] =
+      typeText.includes("own goal") || typeText.includes("own_goal") ? "own_goal" :
+      typeText.includes("penalty") ? "penalty_goal" :
+      "goal";
+
+    rows.push({
+      player_name: playerName,
+      team_name: evt.team?.displayName ?? "",
+      minute,
+      event_type: eventType,
+      detail: injuryTime ? `+${injuryTime}` : null,
+    });
+  }
+  return rows;
+}
+
 async function fetchGoalEventsFromESPN(
   kickoffAt: string,
   team1Name: string,
@@ -543,7 +590,10 @@ async function fetchGoalEventsFromESPN(
 
     let espnEventId: string | null = null;
     for (const event of (scoreboard.events ?? [])) {
-      if (event.status?.type?.state !== "post") continue; // skip unfinished
+      // Note: intentionally NOT filtering by state === "post" here.
+      // ESPN's scoreboard API for WC 2026 reports finished matches as
+      // "pre"/"scheduled" (a known ESPN data issue), so we match by team names
+      // only and let the summary endpoint determine whether goals exist.
       const comps: Array<{ team?: { displayName?: string } }> =
         event.competitions?.[0]?.competitors ?? [];
       const names = comps.map((c) => c.team?.displayName ?? "");
@@ -555,9 +605,12 @@ async function fetchGoalEventsFromESPN(
         break;
       }
     }
-    if (!espnEventId) return [];
+    if (!espnEventId) {
+      console.log(`  ESPN: no event found for ${team1Name} vs ${team2Name} on ${dateStr}`);
+      return [];
+    }
 
-    // Step 2: fetch the match summary and parse keyEvents for goals
+    // Step 2: fetch the match summary; try keyEvents then scoringPlays
     const sumResp = await fetch(
       `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${espnEventId}`,
       { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) },
@@ -566,43 +619,24 @@ async function fetchGoalEventsFromESPN(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const summary = await sumResp.json() as any;
 
-    const rows: ESPNGoalRow[] = [];
-    for (const evt of (summary.keyEvents ?? [])) {
-      const typeText: string = (evt.type?.text ?? "").toLowerCase();
-      if (!typeText.includes("goal")) continue;
-
-      // Parse "23'" or "45+2'" into minute + optional injury time suffix
-      const displayValue: string = evt.clock?.displayValue ?? "";
-      const minuteMatch = displayValue.match(/^(\d+)(?:\+(\d+))?/);
-      const minute = minuteMatch ? parseInt(minuteMatch[1]) : 0;
-      const injuryTime = minuteMatch?.[2] ? parseInt(minuteMatch[2]) : null;
-
-      const participants: Array<{
-        athlete?: { displayName?: string };
-        type?: { text?: string };
-      }> = evt.participants ?? [];
-      const scorerEntry = participants.find(
-        (p) => (p.type?.text ?? "").toLowerCase() === "scorer",
-      );
-      const playerName = scorerEntry?.athlete?.displayName ?? null;
-      if (!playerName) continue;
-
-      const eventType: ESPNGoalRow["event_type"] =
-        typeText.includes("own goal") ? "own_goal" :
-        typeText.includes("penalty") ? "penalty_goal" :
-        "goal";
-
-      rows.push({
-        player_name: playerName,
-        team_name: evt.team?.displayName ?? "",
-        minute,
-        event_type: eventType,
-        detail: injuryTime ? `+${injuryTime}` : null,
-      });
+    // Primary: keyEvents (the standard ESPN soccer summary field)
+    const fromKeyEvents = parseGoalsFromKeyEvents(summary.keyEvents ?? []);
+    if (fromKeyEvents.length > 0) {
+      console.log(`  ESPN keyEvents: ${fromKeyEvents.length} goal(s) for event ${espnEventId}`);
+      return fromKeyEvents;
     }
 
-    return rows;
-  } catch {
+    // Fallback: scoringPlays (used by some ESPN tournament endpoints)
+    const fromScoringPlays = parseGoalsFromKeyEvents(summary.scoringPlays ?? []);
+    if (fromScoringPlays.length > 0) {
+      console.log(`  ESPN scoringPlays: ${fromScoringPlays.length} goal(s) for event ${espnEventId}`);
+      return fromScoringPlays;
+    }
+
+    console.log(`  ESPN: summary fetched for event ${espnEventId} but no goal events found (keyEvents=${(summary.keyEvents ?? []).length}, scoringPlays=${(summary.scoringPlays ?? []).length})`);
+    return [];
+  } catch (err) {
+    console.warn(`  ESPN fetch error: ${(err as Error).message}`);
     return [];
   }
 }
