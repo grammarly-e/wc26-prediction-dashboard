@@ -90,17 +90,9 @@ export default function AdminDashboard({
     eventType: "goal",
   });
 
-  // Sync state
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
-
-  // Debug scorers state
-  const [debuggingScorers, setDebuggingScorers] = useState(false);
-  const [debugScorersResult, setDebugScorersResult] = useState<string | null>(null);
-
-  // Recompute state
-  const [recomputing, setRecomputing] = useState(false);
-  const [recomputeResult, setRecomputeResult] = useState<string | null>(null);
+  // Combined sync state
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<string | null>(null);
 
   // Participant state
   const [participants, setParticipants] = useState(initialParticipants);
@@ -232,62 +224,52 @@ export default function AdminDashboard({
     }
   }
 
-  async function runSync() {
-    setSyncing(true);
-    setSyncResult(null);
-    const res = await fetch("/api/admin/sync", { method: "POST" });
-    setSyncing(false);
-    if (res.ok) {
-      const body = await res.json() as { finishedScored?: number };
-      setSyncResult(`Done - ${body.finishedScored ?? 0} match(es) scored.`);
-      startTransition(() => router.refresh());
-    } else {
-      const body = await res.json() as { error?: string };
-      setSyncResult("Error: " + (body.error ?? "unknown"));
-    }
-  }
+  async function runAll() {
+    setRunning(true);
+    setRunResult(null);
+    const parts: string[] = [];
 
-  async function runDebugScorers() {
-    setDebuggingScorers(true);
-    setDebugScorersResult(null);
-    const res = await fetch("/api/admin/debug-scorers");
-    setDebuggingScorers(false);
-    if (res.ok) {
+    // 1. Sync & Score
+    try {
+      const res = await fetch("/api/admin/sync", { method: "POST" });
+      const body = await res.json() as { finishedScored?: number; error?: string };
+      parts.push(res.ok
+        ? `Sync: ${body.finishedScored ?? 0} match(es) scored`
+        : `Sync error: ${body.error ?? "unknown"}`);
+    } catch (e) {
+      parts.push(`Sync error: ${(e as Error).message}`);
+    }
+
+    // 2. Recompute Standings & Bracket
+    try {
+      const res = await fetch("/api/admin/recompute", { method: "POST" });
+      const body = await res.json() as { groupsRecomputed?: number; slotsUpdated?: number; error?: string };
+      parts.push(res.ok
+        ? `Standings: ${body.groupsRecomputed ?? 0} groups, ${body.slotsUpdated ?? 0} slots`
+        : `Standings error: ${body.error ?? "unknown"}`);
+    } catch (e) {
+      parts.push(`Standings error: ${(e as Error).message}`);
+    }
+
+    // 3. Debug Scorers
+    try {
+      const res = await fetch("/api/admin/debug-scorers");
       const body = await res.json() as Record<string, unknown>;
-      const lines = [
-        `match_events total: ${body.match_events_total}`,
-        `goal events: ${body.goal_events_count}${body.goal_events_error ? ` (ERR: ${body.goal_events_error})` : ""}`,
-        `top_scorers rows: ${body.top_scorers_count}${body.top_scorers_error ? ` (ERR: ${body.top_scorers_error})` : ""}`,
-        `test write: ${body.test_insert_ok ? "OK" : `FAILED — ${body.test_insert_error}`}`,
+      const scorerLines = [
+        `events: ${body.goal_events_count ?? 0}`,
+        `scorers: ${body.top_scorers_count ?? 0}`,
+        `write test: ${body.test_insert_ok ? "OK" : `FAIL — ${body.test_insert_error}`}`,
       ];
-      if (body.goal_events_sample && Array.isArray(body.goal_events_sample) && body.goal_events_sample.length) {
-        lines.push("goal events: " + JSON.stringify(body.goal_events_sample));
-      }
-      if (body.top_scorers_rows && Array.isArray(body.top_scorers_rows) && body.top_scorers_rows.length) {
-        lines.push("scorers: " + JSON.stringify(body.top_scorers_rows));
-      }
-      setDebugScorersResult(lines.join(" | "));
-    } else {
-      const body = await res.json() as { error?: string };
-      setDebugScorersResult("Debug error: " + (body.error ?? "unknown"));
+      if (body.goal_events_error) scorerLines.push(`events ERR: ${body.goal_events_error}`);
+      if (body.top_scorers_error) scorerLines.push(`scorers ERR: ${body.top_scorers_error}`);
+      parts.push(`Scorers — ${scorerLines.join(", ")}`);
+    } catch (e) {
+      parts.push(`Scorers error: ${(e as Error).message}`);
     }
-  }
 
-  async function runRecompute() {
-    setRecomputing(true);
-    setRecomputeResult(null);
-    const res = await fetch("/api/admin/recompute", { method: "POST" });
-    setRecomputing(false);
-    if (res.ok) {
-      const body = await res.json() as { groupsRecomputed?: number; slotsUpdated?: number };
-      setRecomputeResult(
-        `Standings recomputed (${body.groupsRecomputed ?? 0} groups), ${body.slotsUpdated ?? 0} bracket slot(s) updated.`
-      );
-      startTransition(() => router.refresh());
-    } else {
-      const body = await res.json() as { error?: string };
-      setRecomputeResult("Error: " + (body.error ?? "unknown"));
-    }
+    setRunning(false);
+    setRunResult(parts.join(" · "));
+    startTransition(() => router.refresh());
   }
 
   async function deleteParticipant(id: string, name: string) {
@@ -323,35 +305,15 @@ export default function AdminDashboard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         <div className="flex flex-wrap items-center gap-3">
-          {recomputeResult && (
-            <span className="text-xs text-neutral-500">{recomputeResult}</span>
-          )}
-          {syncResult && (
-            <span className="text-xs text-neutral-500">{syncResult}</span>
-          )}
-          {debugScorersResult && (
-            <span className="break-all text-xs text-amber-700">{debugScorersResult}</span>
+          {runResult && (
+            <span className="max-w-lg break-words text-xs text-neutral-500">{runResult}</span>
           )}
           <button
-            onClick={runRecompute}
-            disabled={recomputing}
-            className="rounded-lg bg-pitch px-4 py-2 text-sm font-semibold text-gold hover:opacity-90 disabled:opacity-50"
-          >
-            {recomputing ? "Recomputing..." : "Recompute Standings & Bracket"}
-          </button>
-          <button
-            onClick={runSync}
-            disabled={syncing}
+            onClick={runAll}
+            disabled={running}
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
           >
-            {syncing ? "Syncing..." : "Sync & Score"}
-          </button>
-          <button
-            onClick={runDebugScorers}
-            disabled={debuggingScorers}
-            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-          >
-            {debuggingScorers ? "Checking..." : "Debug Scorers"}
+            {running ? "Running..." : "Sync & Update"}
           </button>
           <button
             onClick={logout}
