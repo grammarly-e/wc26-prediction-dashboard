@@ -1,46 +1,88 @@
 // ============================================================================
 // GET /api/auto-sync — staleness-guarded sync trigger, no auth required.
 //
-// Called once on page load by AutoRefresher. If the most recently updated match
-// row is older than STALE_THRESHOLD_MS (24 h), this runs a full sync so that
-// visitors always see reasonably fresh data even if GitHub Actions has been
-// down or slow.
+// Called periodically by AutoRefresher. Checks whether a sync is needed
+// before hitting any external APIs, so hammering this endpoint is safe.
 //
-// No secret required because the endpoint self-rate-limits: it checks
-// last_synced_at before doing anything and skips the sync if data is fresh.
-// Concurrent calls during the same stale window are safe — football-data.org
-// allows 10 req/min and a full sync uses 3 calls, well within that.
+// Thresholds:
+//   - Any match is live                → sync if data is > 60 s old
+//   - A match finished within 15 min  → sync if data is > 90 s old
+//   - No active match window           → sync if data is > 24 h old
+//
+// The short thresholds ensure scores and match events are reflected within
+// ~a minute of them changing, without burning unnecessary API calls during
+// the ~22 hours per day when nothing is happening.
 // ============================================================================
 
 import { NextResponse } from "next/server";
-
-import { getLastSyncedAt } from "@/lib/data";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { runSync } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+const LIVE_THRESHOLD_MS        =  60 * 1_000;  //  60 seconds
+const POST_MATCH_THRESHOLD_MS  =  90 * 1_000;  //  90 seconds
+const IDLE_THRESHOLD_MS        = 24 * 3_600 * 1_000; // 24 hours
+const POST_MATCH_WINDOW_MS     = 15 * 60 * 1_000;    // 15 minutes
 
 export async function GET() {
   try {
-    const lastSyncedAt = await getLastSyncedAt();
+    const supabase = createServiceRoleClient();
+
+    // --- Determine the appropriate staleness threshold --------------------
+    const { data: matches } = await supabase
+      .from("matches")
+      .select("status, updated_at, away_score")
+      .in("status", ["live", "finished"])
+      .order("updated_at", { ascending: false })
+      .limit(20);
+
+    const now = Date.now();
+    let threshold = IDLE_THRESHOLD_MS;
+    let reason = "idle";
+
+    if (matches?.length) {
+      const hasLive = matches.some((m) => m.status === "live");
+      const hasRecentFinish = matches.some(
+        (m) => m.status === "finished" && now - new Date(m.updated_at).getTime() <= POST_MATCH_WINDOW_MS
+      );
+
+      if (hasLive) {
+        threshold = LIVE_THRESHOLD_MS;
+        reason = "live_match";
+      } else if (hasRecentFinish) {
+        threshold = POST_MATCH_THRESHOLD_MS;
+        reason = "post_match";
+      }
+    }
+
+    // --- Check last sync time --------------------------------------------
+    const { data: latest } = await supabase
+      .from("matches")
+      .select("updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const lastSyncedAt = latest?.updated_at ?? null;
 
     if (lastSyncedAt) {
-      const ageMs = Date.now() - new Date(lastSyncedAt).getTime();
-      if (ageMs < STALE_THRESHOLD_MS) {
+      const ageMs = now - new Date(lastSyncedAt).getTime();
+      if (ageMs < threshold) {
         return NextResponse.json({
           ok: true,
           skipped: true,
-          reason: "recently_synced",
+          reason,
           lastSyncedAt,
-          ageHours: Math.round(ageMs / 3_600_000),
+          ageMs,
+          thresholdMs: threshold,
         });
       }
     }
 
     const result = await runSync();
-    return NextResponse.json({ skipped: false, triggered: true, ...result });
+    return NextResponse.json({ skipped: false, triggered: true, reason, ...result });
   } catch (err) {
     console.error("[auto-sync] failed:", err);
     const message = err instanceof Error ? err.message : String(err);

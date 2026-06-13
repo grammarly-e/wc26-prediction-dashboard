@@ -103,8 +103,9 @@ export async function getStageLeaderboards(): Promise<{
   const [predictionsRes, participantsRes] = await Promise.all([
     supabase
       .from("match_predictions")
-      .select("participant_id, points_awarded, matches(round)")
-      .not("points_awarded", "is", null),
+      .select("participant_id, points_awarded, matches!inner(round, status)")
+      .not("points_awarded", "is", null)
+      .eq("matches.status", "finished"),
     supabase.from("participants").select("id, display_name"),
   ]);
   if (predictionsRes.error) throw predictionsRes.error;
@@ -134,7 +135,7 @@ export async function getStageLeaderboards(): Promise<{
   for (const pred of predictionsRes.data as unknown as Array<{
     participant_id: string;
     points_awarded: number | null;
-    matches: { round: Match["round"] } | null;
+    matches: { round: Match["round"]; status: string } | null;
   }>) {
     if (pred.points_awarded === null || !pred.matches) continue;
     const row = rowFor(pred.participant_id);
