@@ -1063,6 +1063,46 @@ async function backfillMissingMatchEvents(
 }
 
 // ----------------------------------------------------------------------------
+// Catch-up scoring: rescores any finished match that has predictions with
+// points_awarded = NULL. This covers the gap where the status transition was
+// visible to the provider but the specific sync call missed it (e.g. provider
+// API lag, or a prior sync error that prevented scoring from completing).
+// Called at the end of every runSync() run, after the newly-finished pass.
+// ----------------------------------------------------------------------------
+
+async function rescoreUnscoredMatches(
+  supabase: SupabaseClient<Database>,
+  alreadyScoredIds: Set<string>,
+): Promise<number> {
+  // Find match_ids for finished matches that still have unscored predictions.
+  const { data: unscoredPreds, error: predsErr } = await supabase
+    .from("match_predictions")
+    .select("match_id")
+    .is("points_awarded", null);
+  if (predsErr || !unscoredPreds?.length) return 0;
+
+  const candidateIds = [...new Set(
+    (unscoredPreds as { match_id: string }[])
+      .map((p) => p.match_id)
+      .filter((id) => !alreadyScoredIds.has(id)),
+  )];
+  if (!candidateIds.length) return 0;
+
+  // Of those, only score the ones that are actually finished.
+  const { data: finishedMatches, error: matchErr } = await supabase
+    .from("matches")
+    .select("id, match_number, team1_id, team2_id, external_id, status")
+    .eq("status", "finished")
+    .in("id", candidateIds);
+  if (matchErr || !finishedMatches?.length) return 0;
+
+  const toScore = finishedMatches as DbMatchRow[];
+  console.log(`Catch-up: scoring ${toScore.length} finished match(es) with unscored predictions …`);
+  await Promise.all(toScore.map((m) => scoreFinishedMatch(supabase, m)));
+  return toScore.length;
+}
+
+// ----------------------------------------------------------------------------
 // Main entry point
 // ----------------------------------------------------------------------------
 
@@ -1081,6 +1121,8 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     // pass so total event-detail API calls never exceed MAX_EVENT_FETCHES.
     let eventBudget = MAX_EVENT_FETCHES;
 
+    const newlyFinishedIds = new Set(newlyFinished.map((m) => m.id));
+
     if (newlyFinished.length > 0) {
       console.log(`Scoring ${newlyFinished.length} newly-finished match(es) …`);
       await Promise.all(newlyFinished.map((m) => scoreFinishedMatch(supabase, m)));
@@ -1096,6 +1138,10 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
       }
     }
 
+    // Catch-up pass: score any finished matches whose predictions are still
+    // unscored (transition was missed by a previous run due to API lag or error).
+    const catchUpCount = await rescoreUnscoredMatches(supabase, newlyFinishedIds);
+
     await syncStandings(supabase);
     await syncTopScorers(supabase);
 
@@ -1103,9 +1149,10 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     // event budget remains after the newly-finished pass above.
     await backfillMissingMatchEvents(supabase, teamsByExternalId, eventBudget);
 
-    const msg = `Sync complete. ${newlyFinished.length} match(es) newly scored.`;
+    const totalScored = newlyFinished.length + catchUpCount;
+    const msg = `Sync complete. ${newlyFinished.length} newly finished, ${catchUpCount} catch-up scored.`;
     console.log(msg);
-    return { ok: true, message: msg, finishedScored: newlyFinished.length };
+    return { ok: true, message: msg, finishedScored: totalScored };
   } catch (err) {
     const msg = `Sync failed: ${(err as Error).message}`;
     console.error(msg);
