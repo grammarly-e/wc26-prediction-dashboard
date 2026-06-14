@@ -236,7 +236,7 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   if (error) throw error;
 
   const totals = new Map<string, { total: number; correct: number; exact: number }>();
-  for (const row of data as Array<{
+  for (const row of data as unknown as Array<{
     match_id: string;
     predicted_home: number;
     predicted_away: number;
@@ -445,7 +445,7 @@ export async function getFinishedMatchPredictions(
   if (error) throw error;
 
   const result = new Map<string, MatchPredictionReveal[]>();
-  for (const row of data as Array<{
+  for (const row of data as unknown as Array<{
     match_id: string;
     predicted_home: number;
     predicted_away: number;
