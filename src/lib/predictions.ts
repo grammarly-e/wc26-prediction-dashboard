@@ -468,8 +468,8 @@ export async function getFinishedMatchPredictions(
       predicted_home: row.predicted_home,
       predicted_away: row.predicted_away,
       points_awarded: points,
-      exact_score: breakdown.exact_score,
-      correct_outcome: breakdown.correct_outcome,
+      exact_score: breakdown.exact_score ?? false,
+      correct_outcome: breakdown.correct_outcome ?? false,
     };
     const list = result.get(row.match_id) ?? [];
     list.push(reveal);
