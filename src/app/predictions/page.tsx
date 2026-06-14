@@ -221,9 +221,11 @@ export default async function PredictionsPage({
   const submittedCount = myPredictions.size;
   const pct = availableCount > 0 ? Math.round((submittedCount / availableCount) * 100) : 0;
 
-  // Only count predictions for finished matches — live match scores are provisional.
-  const finishedMatchIds = new Set(matches.filter((m) => m.status === "finished").map((m) => m.id));
-  const allMyPredictions = Array.from(myPredictions.values()).filter((p) => finishedMatchIds.has(p.match_id));
+  // myPredictions is pre-enriched by getMyMatchPredictions(): finished matches
+  // already have points_awarded and score_breakdown computed from live scores.
+  // Filter to finished-match predictions only for the stats / banner.
+  const allMyPredictions: MatchPrediction[] = Array.from(myPredictions.values())
+    .filter((p) => p.points_awarded !== null);
   const matchPoints = allMyPredictions.reduce((sum, p) => sum + (p.points_awarded ?? 0), 0);
 
   // Count unsubmitted knockout predictions so the banner can tell participants

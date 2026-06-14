@@ -13,6 +13,7 @@
 // ============================================================================
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
+import { scoreMatchPrediction } from "./scoring";
 import type {
   LeaderboardRow,
   Match,
@@ -53,7 +54,8 @@ export async function getMyMatchPredictions(participantId: string): Promise<Map<
     .select("*")
     .eq("participant_id", participantId);
   if (error) throw error;
-  return new Map((data as MatchPrediction[]).map((p) => [p.match_id, p]));
+  const enriched = await enrichMatchPredictions(data as MatchPrediction[], supabase);
+  return new Map(enriched.map((p) => [p.match_id, p]));
 }
 
 export async function getMyTournamentPredictions(
@@ -95,17 +97,61 @@ function isKnockoutRound(round: Match["round"]): boolean {
   return round !== "Group Stage";
 }
 
+// ============================================================================
+// Live-scoring enrichment helper
+//
+// Replaces stale/null points_awarded and score_breakdown on MatchPredictions
+// with values computed directly from match scores — the same rules used by the
+// leaderboard SQL view in migration 0010. Predictions for unfinished matches
+// are returned unchanged (points_awarded remains null).
+// ============================================================================
+
+async function enrichMatchPredictions(
+  predictions: MatchPrediction[],
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+): Promise<MatchPrediction[]> {
+  if (!predictions.length) return predictions;
+  const matchIds = [...new Set(predictions.map((p) => p.match_id))];
+  const { data: matchRows } = await supabase
+    .from("matches")
+    .select("id, home_score, away_score")
+    .eq("status", "finished")
+    .in("id", matchIds);
+
+  const finishedById = new Map(
+    ((matchRows ?? []) as Array<{ id: string; home_score: number | null; away_score: number | null }>)
+      .filter((m) => m.home_score !== null && m.away_score !== null)
+      .map((m) => [m.id, m])
+  );
+
+  return predictions.map((p) => {
+    const m = finishedById.get(p.match_id);
+    if (!m) return p;
+    const { points, breakdown } = scoreMatchPrediction({
+      predictedHome: p.predicted_home,
+      predictedAway: p.predicted_away,
+      actualHome: m.home_score!,
+      actualAway: m.away_score!,
+    });
+    return { ...p, points_awarded: points, score_breakdown: breakdown };
+  });
+}
+
 export async function getStageLeaderboards(): Promise<{
   groupStage: StageLeaderboardRow[];
   knockout: StageLeaderboardRow[];
 }> {
   const supabase = createServerSupabaseClient();
+  // Compute points live from match scores — no dependency on points_awarded.
+  // This mirrors the SQL scoring in leaderboard view migration 0010 so that
+  // the stage breakdown updates the moment match scores land in the DB.
   const [predictionsRes, participantsRes] = await Promise.all([
     supabase
       .from("match_predictions")
-      .select("participant_id, points_awarded, matches!inner(round, status)")
-      .not("points_awarded", "is", null)
-      .eq("matches.status", "finished"),
+      .select("participant_id, predicted_home, predicted_away, matches!inner(round, status, home_score, away_score)")
+      .eq("matches.status", "finished")
+      .not("predicted_home", "is", null)
+      .not("predicted_away", "is", null),
     supabase.from("participants").select("id, display_name"),
   ]);
   if (predictionsRes.error) throw predictionsRes.error;
@@ -134,16 +180,26 @@ export async function getStageLeaderboards(): Promise<{
 
   for (const pred of predictionsRes.data as unknown as Array<{
     participant_id: string;
-    points_awarded: number | null;
-    matches: { round: Match["round"]; status: string } | null;
+    predicted_home: number;
+    predicted_away: number;
+    matches: { round: Match["round"]; status: string; home_score: number | null; away_score: number | null } | null;
   }>) {
-    if (pred.points_awarded === null || !pred.matches) continue;
+    if (!pred.matches || pred.matches.home_score === null || pred.matches.away_score === null) continue;
+
+    // Compute points using the same rules as scoring.ts / migration 0010
+    const { points } = scoreMatchPrediction({
+      predictedHome: pred.predicted_home,
+      predictedAway: pred.predicted_away,
+      actualHome: pred.matches.home_score,
+      actualAway: pred.matches.away_score,
+    });
+
     const row = rowFor(pred.participant_id);
     if (isKnockoutRound(pred.matches.round)) {
-      row.knockout_points += pred.points_awarded;
+      row.knockout_points += points;
       row.knockout_matches_scored += 1;
     } else {
-      row.group_stage_points += pred.points_awarded;
+      row.group_stage_points += points;
       row.group_stage_matches_scored += 1;
     }
   }
@@ -169,19 +225,34 @@ export interface MatchInsight {
 
 export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   const supabase = createServerSupabaseClient();
+  // Join to matches so we can compute outcomes live — no dependency on
+  // score_breakdown being written to the DB by the scoring step.
   const { data, error } = await supabase
     .from("match_predictions")
-    .select("match_id, score_breakdown")
-    .not("points_awarded", "is", null);
+    .select("match_id, predicted_home, predicted_away, matches!inner(home_score, away_score, status)")
+    .eq("matches.status", "finished")
+    .not("predicted_home", "is", null)
+    .not("predicted_away", "is", null);
   if (error) throw error;
 
   const totals = new Map<string, { total: number; correct: number; exact: number }>();
-  for (const row of data as Array<{ match_id: string; score_breakdown: ScoreBreakdown | null }>) {
-    if (!row.score_breakdown) continue;
+  for (const row of data as Array<{
+    match_id: string;
+    predicted_home: number;
+    predicted_away: number;
+    matches: { home_score: number | null; away_score: number | null } | null;
+  }>) {
+    if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
+    const { breakdown } = scoreMatchPrediction({
+      predictedHome: row.predicted_home,
+      predictedAway: row.predicted_away,
+      actualHome: row.matches.home_score,
+      actualAway: row.matches.away_score,
+    });
     const t = totals.get(row.match_id) ?? { total: 0, correct: 0, exact: 0 };
     t.total += 1;
-    if (row.score_breakdown.correct_outcome) t.correct += 1;
-    if (row.score_breakdown.exact_score) t.exact += 1;
+    if (breakdown.correct_outcome) t.correct += 1;
+    if (breakdown.exact_score) t.exact += 1;
     totals.set(row.match_id, t);
   }
 
@@ -207,8 +278,12 @@ export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<str
   const { data, error } = await supabase.from("match_predictions").select("*");
   if (error) throw error;
 
+  // Enrich with live-computed points so the leaderboard breakdown dropdown
+  // reflects current match scores without waiting for the scoring step.
+  const enriched = await enrichMatchPredictions(data as MatchPrediction[], supabase);
+
   const byParticipant = new Map<string, MatchPrediction[]>();
-  for (const row of data as MatchPrediction[]) {
+  for (const row of enriched) {
     const list = byParticipant.get(row.participant_id) ?? [];
     list.push(row);
     byParticipant.set(row.participant_id, list);
@@ -230,7 +305,12 @@ export async function getParticipantMatchPredictions(
     .eq("participant_id", participantId)
     .order("match_id");
   if (error) throw error;
-  return data as MatchPrediction[];
+  // Cast client to satisfy the helper type — both server and service role
+  // clients expose the same SupabaseClient<Database> interface.
+  return enrichMatchPredictions(
+    data as MatchPrediction[],
+    supabase as unknown as ReturnType<typeof createServerSupabaseClient>,
+  );
 }
 
 export async function getParticipantById(
@@ -353,10 +433,15 @@ export async function getFinishedMatchPredictions(
   if (matchIds.length === 0) return new Map();
   const supabase = createServiceRoleClient();
 
+  // Join to matches to get scores so we can compute points live — no
+  // dependency on points_awarded / score_breakdown being written to the DB.
   const { data, error } = await supabase
     .from("match_predictions")
-    .select("match_id, predicted_home, predicted_away, points_awarded, score_breakdown, participants(display_name)")
-    .in("match_id", matchIds);
+    .select("match_id, predicted_home, predicted_away, participants(display_name), matches!inner(home_score, away_score, status)")
+    .in("match_id", matchIds)
+    .eq("matches.status", "finished")
+    .not("predicted_home", "is", null)
+    .not("predicted_away", "is", null);
   if (error) throw error;
 
   const result = new Map<string, MatchPredictionReveal[]>();
@@ -364,10 +449,16 @@ export async function getFinishedMatchPredictions(
     match_id: string;
     predicted_home: number;
     predicted_away: number;
-    points_awarded: number | null;
-    score_breakdown: ScoreBreakdown | null;
     participants: { display_name: string } | { display_name: string }[] | null;
+    matches: { home_score: number | null; away_score: number | null } | null;
   }>) {
+    if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
+    const { points, breakdown } = scoreMatchPrediction({
+      predictedHome: row.predicted_home,
+      predictedAway: row.predicted_away,
+      actualHome: row.matches.home_score,
+      actualAway: row.matches.away_score,
+    });
     const display_name =
       (Array.isArray(row.participants)
         ? row.participants[0]?.display_name
@@ -376,9 +467,9 @@ export async function getFinishedMatchPredictions(
       display_name,
       predicted_home: row.predicted_home,
       predicted_away: row.predicted_away,
-      points_awarded: row.points_awarded,
-      exact_score: row.score_breakdown?.exact_score ?? false,
-      correct_outcome: row.score_breakdown?.correct_outcome ?? false,
+      points_awarded: points,
+      exact_score: breakdown.exact_score,
+      correct_outcome: breakdown.correct_outcome,
     };
     const list = result.get(row.match_id) ?? [];
     list.push(reveal);
