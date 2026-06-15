@@ -80,6 +80,8 @@ interface DbMatchRow {
   team2_code: string;
   team1_id: string | null;
   team2_id: string | null;
+  home_score: number | null;
+  away_score: number | null;
   status: string;
   external_id: string | null;
 }
@@ -168,21 +170,17 @@ function findDbMatch(provider: ProviderMatch, dbMatches: DbMatchRow[]): DbMatchR
 // Step 1+2+3: matches, team resolution, scores/status
 // ----------------------------------------------------------------------------
 
-async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyFinished: DbMatchRow[]; teamsByExternalId: Map<number, string> }> {
+async function syncMatches(
+  supabase: SupabaseClient<Database>,
+  teamsByName: Map<string, DbTeamRow>,
+): Promise<{ newlyFinished: DbMatchRow[]; teamsByExternalId: Map<number, string> }> {
   console.log("Fetching matches from football-data.org …");
   const providerMatches = await fetchMatches();
 
   const { data: dbMatches, error: matchesErr } = await supabase
     .from("matches")
-    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, status, external_id");
+    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, external_id");
   if (matchesErr) throw matchesErr;
-
-  const { data: dbTeams, error: teamsErr } = await supabase.from("teams").select("id, name, is_placeholder");
-  if (teamsErr) throw teamsErr;
-
-  const teamsByName = new Map<string, DbTeamRow>(
-    (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
-  );
 
   const newlyFinished: DbMatchRow[] = [];
   const teamsByExternalId = new Map<number, string>(); // provider team id -> db team uuid
@@ -230,7 +228,15 @@ async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyF
 
     updated++;
     if (isNowFinished && !wasFinished) {
-      newlyFinished.push({ ...dbMatch, team1_id: team1Id, team2_id: team2Id, status: "finished" });
+      newlyFinished.push({
+        ...dbMatch,
+        team1_id: team1Id,
+        team2_id: team2Id,
+        status: "finished",
+        // Include provider scores so scoreFinishedMatch can skip a DB round-trip.
+        home_score: pm.score.fullTime.home,
+        away_score: pm.score.fullTime.away,
+      });
     }
   }
 
@@ -243,12 +249,10 @@ async function syncMatches(supabase: SupabaseClient<Database>): Promise<{ newlyF
 // ----------------------------------------------------------------------------
 
 async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbMatchRow) {
-  const { data: fresh, error: freshErr } = await supabase
-    .from("matches")
-    .select("home_score, away_score")
-    .eq("id", match.id)
-    .single();
-  if (freshErr || fresh.home_score === null || fresh.away_score === null) return;
+  // Scores are already on the match row (populated by syncMatches from the
+  // provider payload, or by recoverStaleLiveMatches from the DB). No extra
+  // DB round-trip needed.
+  if (match.home_score === null || match.away_score === null) return;
 
   const { data: predictions, error: predErr } = await supabase
     .from("match_predictions")
@@ -261,15 +265,15 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
   if (!predictions || predictions.length === 0) return;
 
   console.log(
-    `  Scoring ${predictions.length} prediction(s) for match #${match.match_number} (final ${fresh.home_score}-${fresh.away_score}) …`
+    `  Scoring ${predictions.length} prediction(s) for match #${match.match_number} (final ${match.home_score}-${match.away_score}) …`
   );
 
   for (const p of predictions) {
     const { points, breakdown } = scoreMatchPrediction({
       predictedHome: p.predicted_home,
       predictedAway: p.predicted_away,
-      actualHome: fresh.home_score,
-      actualAway: fresh.away_score,
+      actualHome: match.home_score,
+      actualAway: match.away_score,
     });
 
     const { error: scoreErr } = await supabase
@@ -285,7 +289,10 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
 // Step 5a: standings
 // ----------------------------------------------------------------------------
 
-async function syncStandings(supabase: SupabaseClient<Database>) {
+async function syncStandings(
+  supabase: SupabaseClient<Database>,
+  teamsByName: Map<string, DbTeamRow>,
+) {
   console.log("Fetching standings …");
   let groups;
   try {
@@ -294,12 +301,6 @@ async function syncStandings(supabase: SupabaseClient<Database>) {
     console.error(`  ! Standings fetch failed (often unavailable before the group stage starts): ${(err as Error).message}`);
     return;
   }
-
-  const { data: dbTeams, error: teamsErr } = await supabase.from("teams").select("id, name, is_placeholder");
-  if (teamsErr) throw teamsErr;
-  const teamsByName = new Map<string, DbTeamRow>(
-    (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
-  );
 
   let written = 0;
   for (const group of groups) {
@@ -425,7 +426,10 @@ async function buildScorersFromEvents(supabase: SupabaseClient<Database>): Promi
     .sort((a, b) => b.goals - a.goals);
 }
 
-async function syncTopScorers(supabase: SupabaseClient<Database>) {
+async function syncTopScorers(
+  supabase: SupabaseClient<Database>,
+  teamsByName: Map<string, DbTeamRow>,
+) {
   console.log("Fetching top scorers …");
 
   let scorers: NormalisedScorer[] = [];
@@ -483,12 +487,6 @@ async function syncTopScorers(supabase: SupabaseClient<Database>) {
     console.log("  No scorer data yet from any source.");
     return;
   }
-
-  const { data: dbTeams, error: teamsErr } = await supabase.from("teams").select("id, name, is_placeholder");
-  if (teamsErr) throw teamsErr;
-  const teamsByName = new Map<string, DbTeamRow>(
-    (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
-  );
 
   scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
 
@@ -889,8 +887,8 @@ async function fetchGoalEventsFromFIFA(
 }
 
 /** Called when football-data.org returns no goals for a finished match.
- *  Tries ESPN summary first, then SofaScore incidents as a secondary fallback. */
-async function syncMatchEventsFromESPN(
+ *  Tries ESPN, SofaScore, then FIFA.com in sequence until one returns goal data. */
+async function storeExternalMatchEvents(
   supabase: SupabaseClient<Database>,
   matchDbId: string,
   matchNumber: number,
@@ -979,9 +977,9 @@ async function syncMatchEvents(
   }
 
   if (!detail.goals || detail.goals.length === 0) {
-    // football-data.org has no events — try ESPN before giving up.
-    // A 0-0 result is handled gracefully: ESPN will also return no goals.
-    await syncMatchEventsFromESPN(supabase, matchDbId, matchNumber);
+    // football-data.org has no events — try ESPN/SofaScore/FIFA before giving up.
+    // A 0-0 result is handled gracefully: all sources will also return no goals.
+    await storeExternalMatchEvents(supabase, matchDbId, matchNumber);
     return;
   }
 
@@ -1088,11 +1086,13 @@ async function rescoreUnscoredMatches(
   )];
   if (!candidateIds.length) return 0;
 
-  // Of those, only score the ones that are actually finished.
+  // Of those, only score the ones that are actually finished with known scores.
   const { data: finishedMatches, error: matchErr } = await supabase
     .from("matches")
-    .select("id, match_number, team1_id, team2_id, external_id, status")
+    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, external_id, status")
     .eq("status", "finished")
+    .not("home_score", "is", null)
+    .not("away_score", "is", null)
     .in("id", candidateIds);
   if (matchErr || !finishedMatches?.length) return 0;
 
@@ -1100,6 +1100,74 @@ async function rescoreUnscoredMatches(
   console.log(`Catch-up: scoring ${toScore.length} finished match(es) with unscored predictions …`);
   await Promise.all(toScore.map((m) => scoreFinishedMatch(supabase, m)));
   return toScore.length;
+}
+
+// ----------------------------------------------------------------------------
+// Stale "live" match recovery
+//
+// football-data.org's free tier can lag or get stuck reporting IN_PLAY/PAUSED
+// for a match that ended minutes or hours ago. If a match has been "live" for
+// more than STALE_LIVE_THRESHOLD_HOURS (covers 90 min + 30 min extra time +
+// penalty shootout + generous API-lag buffer), it is certainly over.
+//
+// For matches with scores already in the DB: force status → "finished" and
+// include them in the newly-finished scoring pass. The correct final score is
+// almost certainly what football-data.org last reported while the match was
+// live — if not, the admin panel can correct it.
+//
+// For matches with no scores: log a warning and leave them for manual fix
+// via the admin panel, since we have no idea what the result was.
+// ----------------------------------------------------------------------------
+
+const STALE_LIVE_THRESHOLD_HOURS = 3.5;
+
+async function recoverStaleLiveMatches(
+  supabase: SupabaseClient<Database>,
+): Promise<DbMatchRow[]> {
+  const cutoff = new Date(Date.now() - STALE_LIVE_THRESHOLD_HOURS * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("matches")
+    .select("id, match_number, team1_code, team2_code, team1_id, team2_id, external_id, status, kickoff_at, home_score, away_score")
+    .eq("status", "live")
+    .lt("kickoff_at", cutoff);
+
+  if (error) {
+    console.error(`  ! stale-live check failed: ${error.message}`);
+    return [];
+  }
+  if (!data?.length) return [];
+
+  const stale = data as DbMatchRow[];
+  const recovered: DbMatchRow[] = [];
+
+  for (const m of stale) {
+    if (m.home_score === null || m.away_score === null) {
+      console.warn(
+        `  ! Match #${m.match_number} has been "live" since ${m.kickoff_at} but has no score — ` +
+        `cannot auto-recover. Fix manually via the admin panel.`
+      );
+      continue;
+    }
+    const { error: fixErr } = await supabase
+      .from("matches")
+      .update({ status: "finished" })
+      .eq("id", m.id);
+    if (fixErr) {
+      console.error(`  ! Failed to recover stale-live match #${m.match_number}: ${fixErr.message}`);
+      continue;
+    }
+    console.log(
+      `  ↩ Recovered stale-live match #${m.match_number} → "finished" ` +
+      `(${m.home_score}-${m.away_score}, kicked off ${m.kickoff_at})`
+    );
+    recovered.push({ ...m, status: "finished" });
+  }
+
+  if (recovered.length > 0) {
+    console.log(`Stale-live recovery: ${recovered.length} match(es) force-finished.`);
+  }
+  return recovered;
 }
 
 // ----------------------------------------------------------------------------
@@ -1115,7 +1183,23 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
   const supabase = getServiceRoleClient();
 
   try {
-    const { newlyFinished, teamsByExternalId } = await syncMatches(supabase);
+    // Fetch the teams table once and share it across all sync steps.
+    // syncMatches may add new resolved teams to this map (placeholder slots);
+    // syncStandings and syncTopScorers consume the updated map without querying again.
+    const { data: dbTeams, error: teamsErr } = await supabase
+      .from("teams").select("id, name, is_placeholder");
+    if (teamsErr) throw teamsErr;
+    const teamsByName = new Map<string, DbTeamRow>(
+      (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder)
+        .map((t) => [t.name.trim().toLowerCase(), t])
+    );
+
+    const { newlyFinished: freshlyFinished, teamsByExternalId } = await syncMatches(supabase, teamsByName);
+
+    // Recover any match stuck "live" for more than 3.5 hours.
+    const recovered = await recoverStaleLiveMatches(supabase);
+    const freshIds = new Set(freshlyFinished.map((m) => m.id));
+    const newlyFinished = [...freshlyFinished, ...recovered.filter((m) => !freshIds.has(m.id))];
 
     // eventBudget is shared across the newly-finished pass and the backfill
     // pass so total event-detail API calls never exceed MAX_EVENT_FETCHES.
@@ -1142,8 +1226,8 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     // unscored (transition was missed by a previous run due to API lag or error).
     const catchUpCount = await rescoreUnscoredMatches(supabase, newlyFinishedIds);
 
-    await syncStandings(supabase);
-    await syncTopScorers(supabase);
+    await syncStandings(supabase, teamsByName);
+    await syncTopScorers(supabase, teamsByName);
 
     // Backfill any finished matches that still lack goal data, using whatever
     // event budget remains after the newly-finished pass above.

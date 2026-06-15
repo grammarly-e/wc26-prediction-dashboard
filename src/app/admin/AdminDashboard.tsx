@@ -94,6 +94,10 @@ export default function AdminDashboard({
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
 
+  // Stale-live recovery state
+  const [recovering, setRecovering] = useState(false);
+  const [recoverResult, setRecoverResult] = useState<string | null>(null);
+
   // Participant state
   const [participants, setParticipants] = useState(initialParticipants);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -272,6 +276,35 @@ export default function AdminDashboard({
     startTransition(() => router.refresh());
   }
 
+  async function recoverLive() {
+    setRecovering(true);
+    setRecoverResult(null);
+    try {
+      const res = await fetch("/api/admin/recover-live", { method: "POST" });
+      const body = await res.json() as {
+        ok?: boolean;
+        staleFound?: number;
+        results?: Array<{ matchNumber: number; outcome: string }>;
+        error?: string;
+      };
+      if (res.ok) {
+        if (!body.staleFound) {
+          setRecoverResult("No stuck live matches found.");
+        } else {
+          const lines = (body.results ?? []).map((r) => `#${r.matchNumber}: ${r.outcome}`).join(" · ");
+          setRecoverResult(`Found ${body.staleFound} stale match(es). ${lines}`);
+          startTransition(() => router.refresh());
+        }
+      } else {
+        setRecoverResult(`Error: ${body.error ?? "unknown"}`);
+      }
+    } catch (e) {
+      setRecoverResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setRecovering(false);
+    }
+  }
+
   async function deleteParticipant(id: string, name: string) {
     if (!confirm(`Delete "${name}" and all their predictions? This cannot be undone.`)) return;
     setDeletingId(id);
@@ -305,9 +338,20 @@ export default function AdminDashboard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         <div className="flex flex-wrap items-center gap-3">
+          {recoverResult && (
+            <span className="max-w-lg break-words text-xs text-amber-700">{recoverResult}</span>
+          )}
           {runResult && (
             <span className="max-w-lg break-words text-xs text-neutral-500">{runResult}</span>
           )}
+          <button
+            onClick={recoverLive}
+            disabled={recovering}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+            title="Force-finish matches stuck as &apos;live&apos; for more than 3.5 hours"
+          >
+            {recovering ? "Recovering..." : "Recover Stuck Matches"}
+          </button>
           <button
             onClick={runAll}
             disabled={running}
