@@ -64,6 +64,17 @@ function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
   return grouped;
 }
 
+const STATUS_SORT_ORDER: Record<string, number> = { live: 0, scheduled: 1, postponed: 2, finished: 3 };
+
+function sortMatchesForDisplay(matches: Match[]): Match[] {
+  return [...matches].sort((a, b) => {
+    const sa = STATUS_SORT_ORDER[a.status] ?? 99;
+    const sb = STATUS_SORT_ORDER[b.status] ?? 99;
+    if (sa !== sb) return sa - sb;
+    return new Date(a.kickoff_at).getTime() - new Date(b.kickoff_at).getTime();
+  });
+}
+
 interface InsightCallout {
   match: Match;
   insight: MatchInsight;
@@ -193,6 +204,13 @@ export default async function MatchesPage({
 
   const scheduleMatches = filterMatches(allMatches, filterGroup, filterSearch, teamNames);
   const grouped = groupByRound(scheduleMatches);
+  // Sort within each round: live → scheduled → finished
+  for (const [round, roundMatches] of grouped) {
+    grouped.set(round, sortMatchesForDisplay(roundMatches));
+  }
+  const hasUpcomingInSchedule = scheduleMatches.some(
+    (m) => m.status === "scheduled" || m.status === "live",
+  );
 
   return (
     <div className="flex flex-col gap-8">
@@ -253,18 +271,34 @@ export default async function MatchesPage({
 
       <section className="flex flex-col gap-6">
         <div>
-          <h2 className="mb-3 text-lg font-bold">Full schedule</h2>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-lg font-bold">Full schedule</h2>
+            {hasUpcomingInSchedule && (
+              <a
+                href="#upcoming"
+                className="shrink-0 rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-200 transition-colors"
+              >
+                ↓ Jump to upcoming
+              </a>
+            )}
+          </div>
           <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
         </div>
 
         {scheduleMatches.length === 0 ? (
           <p className="card p-4 text-sm text-neutral-500">No matches found for this filter.</p>
-        ) : (
-          ROUND_ORDER.map((round) => {
+        ) : (() => {
+          let firstUpcomingRoundFound = false;
+          return ROUND_ORDER.map((round) => {
             const roundMatches = grouped.get(round) ?? [];
             if (roundMatches.length === 0) return null;
+            const roundHasUpcoming = roundMatches.some(
+              (m) => m.status === "scheduled" || m.status === "live",
+            );
+            const isFirstUpcomingRound = !firstUpcomingRoundFound && roundHasUpcoming;
+            if (isFirstUpcomingRound) firstUpcomingRoundFound = true;
             return (
-              <div key={round}>
+              <div key={round} id={isFirstUpcomingRound ? "upcoming" : undefined}>
                 <h3 className="mb-3 font-semibold text-neutral-700">
                   {round} <span className="font-normal text-neutral-400">({roundMatches.length})</span>
                 </h3>
@@ -284,8 +318,8 @@ export default async function MatchesPage({
                 </div>
               </div>
             );
-          })
-        )}
+          });
+        })()}
       </section>
 
       <SyncFooter lastSyncedAt={lastSyncedAt} />
