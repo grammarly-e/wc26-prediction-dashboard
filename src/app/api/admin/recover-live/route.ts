@@ -72,18 +72,25 @@ export async function POST() {
       .eq("match_id", m.id);
 
     if (preds?.length) {
-      for (const p of preds as { id: string; predicted_home: number; predicted_away: number }[]) {
-        const { points, breakdown } = scoreMatchPrediction({
-          predictedHome: p.predicted_home,
-          predictedAway: p.predicted_away,
-          actualHome: m.home_score,
-          actualAway: m.away_score,
-        });
-        await supabase
-          .from("match_predictions")
-          .update({ points_awarded: points, score_breakdown: breakdown })
-          .eq("id", p.id);
-      }
+      const actualHome = m.home_score;
+      const actualAway = m.away_score;
+      // Batched: independent per-prediction writes, no need to serialize.
+      await Promise.all(
+        (preds as { id: string; predicted_home: number; predicted_away: number }[]).map(
+          async (p) => {
+            const { points, breakdown } = scoreMatchPrediction({
+              predictedHome: p.predicted_home,
+              predictedAway: p.predicted_away,
+              actualHome,
+              actualAway,
+            });
+            await supabase
+              .from("match_predictions")
+              .update({ points_awarded: points, score_breakdown: breakdown })
+              .eq("id", p.id);
+          }
+        )
+      );
     }
 
     results.push({

@@ -50,6 +50,7 @@ import {
   type ProviderMatch,
 } from "./providers/football-data";
 import { scoreMatchPrediction } from "./scoring";
+import { aggregateGoalsFromMatchEvents } from "./scorer-aggregation";
 import type { Database } from "./types";
 
 // ----------------------------------------------------------------------------
@@ -268,21 +269,31 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
     `  Scoring ${predictions.length} prediction(s) for match #${match.match_number} (final ${match.home_score}-${match.away_score}) …`
   );
 
-  for (const p of predictions) {
-    const { points, breakdown } = scoreMatchPrediction({
-      predictedHome: p.predicted_home,
-      predictedAway: p.predicted_away,
-      actualHome: match.home_score,
-      actualAway: match.away_score,
-    });
+  // Narrowed to non-null locals so the closures below don't lose the
+  // null-check TypeScript already saw at the top of this function.
+  const actualHome = match.home_score;
+  const actualAway = match.away_score;
 
-    const { error: scoreErr } = await supabase
-      .from("match_predictions")
-      .update({ points_awarded: points, score_breakdown: breakdown })
-      .eq("id", p.id);
+  // Batched instead of a sequential for-await loop: all predictions for this
+  // match are independent writes, so firing them concurrently cuts the time
+  // to score a match from O(predictions) round-trips to O(1).
+  await Promise.all(
+    predictions.map(async (p) => {
+      const { points, breakdown } = scoreMatchPrediction({
+        predictedHome: p.predicted_home,
+        predictedAway: p.predicted_away,
+        actualHome,
+        actualAway,
+      });
 
-    if (scoreErr) console.error(`    ✗ Prediction ${p.id}: ${scoreErr.message}`);
-  }
+      const { error: scoreErr } = await supabase
+        .from("match_predictions")
+        .update({ points_awarded: points, score_breakdown: breakdown })
+        .eq("id", p.id);
+
+      if (scoreErr) console.error(`    ✗ Prediction ${p.id}: ${scoreErr.message}`);
+    })
+  );
 }
 
 // ----------------------------------------------------------------------------
@@ -395,35 +406,16 @@ async function fetchScorersFromESPN(): Promise<NormalisedScorer[]> {
  * Assists are not tracked in match_events, so they're set to 0 here.
  */
 async function buildScorersFromEvents(supabase: SupabaseClient<Database>): Promise<NormalisedScorer[]> {
-  const { data: events, error } = await supabase
-    .from("match_events")
-    .select("player_name, team_id, event_type")
-    .in("event_type", ["goal", "penalty_goal"])
-    .not("player_name", "is", null);
-  if (error || !events?.length) return [];
-
-  const { data: teams } = await supabase.from("teams").select("id, name");
-  const teamNameById = new Map<string, string>(
-    ((teams ?? []) as { id: string; name: string }[]).map((t) => [t.id, t.name])
-  );
-
-  const counts = new Map<string, { goals: number; teamId: string | null }>();
-  for (const row of events as { player_name: string | null; team_id: string | null; event_type: string }[]) {
-    if (!row.player_name) continue;
-    const entry = counts.get(row.player_name) ?? { goals: 0, teamId: row.team_id };
-    entry.goals += 1;
-    counts.set(row.player_name, entry);
-  }
-
-  return Array.from(counts.entries())
-    .map(([name, { goals, teamId }]) => ({
-      name,
-      teamName: teamId ? (teamNameById.get(teamId) ?? "") : "",
-      goals,
-      assists: 0,
-    }))
-    .filter((e) => e.goals > 0)
-    .sort((a, b) => b.goals - a.goals);
+  const aggregated = await aggregateGoalsFromMatchEvents(supabase);
+  // Adapt the shared aggregation's shape to this module's NormalisedScorer
+  // (teamName defaults to "" here instead of null — kept to match this
+  // function's prior behaviour and downstream namesLikelyMatch() lookups).
+  return aggregated.map((s) => ({
+    name: s.name,
+    teamName: s.teamName ?? "",
+    goals: s.goals,
+    assists: 0,
+  }));
 }
 
 async function syncTopScorers(
@@ -496,9 +488,12 @@ async function syncTopScorers(
     .neq("id", "00000000-0000-0000-0000-000000000000");
   if (delErr) throw new Error(`top_scorers delete failed: ${delErr.message}`);
 
-  const insertErrors: string[] = [];
-  for (let i = 0; i < scorers.length; i++) {
-    const s = scorers[i];
+  // Resolve teams (pure, in-memory) first, then write every row in a single
+  // batched insert — was a sequential insert-per-row loop, which meant a
+  // partial failure could leave the table half-replaced after the delete
+  // above. One insert call is atomic: it either writes the whole list or
+  // fails the whole list, and is far fewer round trips besides.
+  const rows = scorers.map((s, i) => {
     let team = teamsByName.get(s.teamName.trim().toLowerCase());
     if (!team) {
       for (const t of teamsByName.values()) {
@@ -508,22 +503,18 @@ async function syncTopScorers(
         }
       }
     }
-
-    const { error } = await supabase.from("top_scorers").insert({
+    return {
       player_name: s.name,
       player_id: null,
       team_id: team?.id ?? null,
       goals: s.goals,
       assists: s.assists,
       rank: i + 1,
-    });
+    };
+  });
 
-    if (error) insertErrors.push(`${s.name}: ${error.message}`);
-  }
-
-  if (insertErrors.length) {
-    throw new Error(`top_scorers insert failed for ${insertErrors.length} row(s):\n${insertErrors.join("\n")}`);
-  }
+  const { error: insertErr } = await supabase.from("top_scorers").insert(rows);
+  if (insertErr) throw new Error(`top_scorers insert failed: ${insertErr.message}`);
   console.log(`Scorers: ${scorers.length} row(s) written.`);
 }
 
@@ -1236,6 +1227,18 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     const totalScored = newlyFinished.length + catchUpCount;
     const msg = `Sync complete. ${newlyFinished.length} newly finished, ${catchUpCount} catch-up scored.`;
     console.log(msg);
+
+    // Record that a sync actually ran, for data.ts::getLastSyncedAt(). Best
+    // effort: don't fail the whole sync if this table doesn't exist yet
+    // (migration 0011 not applied) -- getLastSyncedAt() falls back to
+    // MAX(matches.updated_at) in that case.
+    const { error: syncStateErr } = await supabase
+      .from("sync_state")
+      .upsert({ id: true, last_synced_at: new Date().toISOString(), last_message: msg });
+    if (syncStateErr) {
+      console.warn(`  ! Could not write sync_state (has migration 0011 been applied?): ${syncStateErr.message}`);
+    }
+
     return { ok: true, message: msg, finishedScored: totalScored };
   } catch (err) {
     const msg = `Sync failed: ${(err as Error).message}`;
@@ -1272,28 +1275,29 @@ export async function rebuildTopScorersFromEvents(): Promise<void> {
     .neq("id", "00000000-0000-0000-0000-000000000000");
   if (delErr) throw new Error(`[rebuildTopScorersFromEvents] delete failed: ${delErr.message}`);
 
-  const insertErrors: string[] = [];
-  for (let i = 0; i < scorers.length; i++) {
-    const s = scorers[i];
+  // Single batched insert instead of a sequential insert-per-row loop — see
+  // syncTopScorers() above for why (atomicity: avoids a half-replaced table
+  // if one row in the middle of the loop ever failed).
+  const rows = scorers.map((s, i) => {
     let team = teamsByName.get(s.teamName.trim().toLowerCase());
     if (!team) {
       for (const t of teamsByName.values()) {
         if (namesLikelyMatch(t.name, s.teamName)) { team = t; break; }
       }
     }
-    const { error: insErr } = await supabase.from("top_scorers").insert({
+    return {
       player_name: s.name,
       player_id: null,
       team_id: team?.id ?? null,
       goals: s.goals,
       assists: s.assists,
       rank: i + 1,
-    });
-    if (insErr) insertErrors.push(`${s.name}: ${insErr.message}`);
-  }
+    };
+  });
 
-  if (insertErrors.length) {
-    throw new Error(`[rebuildTopScorersFromEvents] insert failed for ${insertErrors.length} row(s):\n${insertErrors.join("\n")}`);
+  const { error: insertErr } = await supabase.from("top_scorers").insert(rows);
+  if (insertErr) {
+    throw new Error(`[rebuildTopScorersFromEvents] insert failed: ${insertErr.message}`);
   }
   console.log(`[rebuildTopScorersFromEvents] ${scorers.length} scorer(s) written from match_events.`);
 }

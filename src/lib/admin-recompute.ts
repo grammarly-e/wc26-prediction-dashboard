@@ -149,30 +149,40 @@ async function rescoreAllFinishedMatches(
     (m) => m.status === "finished" && m.home_score !== null && m.away_score !== null
   );
 
-  let rescored = 0;
-  for (const m of finished) {
-    const { data: predictions, error } = await supabase
-      .from("match_predictions")
-      .select("id, predicted_home, predicted_away")
-      .eq("match_id", m.id);
-
-    if (error || !predictions?.length) continue;
-
-    for (const p of predictions as { id: string; predicted_home: number; predicted_away: number }[]) {
-      const { points, breakdown } = scoreMatchPrediction({
-        predictedHome: p.predicted_home,
-        predictedAway: p.predicted_away,
-        actualHome: m.home_score!,
-        actualAway: m.away_score!,
-      });
-      await supabase
+  // Each finished match's predictions are scored concurrently via Promise.all
+  // (was a sequential for-await loop — same end result, far fewer round trips
+  // when many matches need rescoring at once, e.g. after a bulk score fix).
+  const perMatchCounts = await Promise.all(
+    finished.map(async (m) => {
+      const { data: predictions, error } = await supabase
         .from("match_predictions")
-        .update({ points_awarded: points, score_breakdown: breakdown })
-        .eq("id", p.id);
-      rescored++;
-    }
-  }
-  return rescored;
+        .select("id, predicted_home, predicted_away")
+        .eq("match_id", m.id);
+
+      if (error || !predictions?.length) return 0;
+
+      await Promise.all(
+        (predictions as { id: string; predicted_home: number; predicted_away: number }[]).map(
+          async (p) => {
+            const { points, breakdown } = scoreMatchPrediction({
+              predictedHome: p.predicted_home,
+              predictedAway: p.predicted_away,
+              actualHome: m.home_score!,
+              actualAway: m.away_score!,
+            });
+            await supabase
+              .from("match_predictions")
+              .update({ points_awarded: points, score_breakdown: breakdown })
+              .eq("id", p.id);
+          }
+        )
+      );
+
+      return predictions.length;
+    })
+  );
+
+  return perMatchCounts.reduce((sum, n) => sum + n, 0);
 }
 
 // -- Step 2: Compute group standings ------------------------------------------

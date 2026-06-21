@@ -6,30 +6,10 @@ import MatchPredictionCard from "@/components/MatchPredictionCard";
 import ScoreBanner from "@/components/ScoreBanner";
 import { getMatches, getTeamNameMap } from "@/lib/data";
 import { getCurrentParticipant, getMyMatchPredictions } from "@/lib/predictions";
-import type { Match, MatchPrediction, MatchRound } from "@/lib/types";
+import { ROUND_ORDER, filterMatches, groupByRound } from "@/lib/match-utils";
+import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
-
-const ROUND_ORDER: MatchRound[] = [
-  "Group Stage",
-  "Round of 32",
-  "Round of 16",
-  "Quarter-final",
-  "Semi-final",
-  "Match for third place",
-  "Final",
-];
-
-function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
-  const grouped = new Map<MatchRound, Match[]>();
-  for (const round of ROUND_ORDER) grouped.set(round, []);
-  for (const m of matches) {
-    const list = grouped.get(m.round) ?? [];
-    list.push(m);
-    grouped.set(m.round, list);
-  }
-  return grouped;
-}
 
 function teamsConfirmed(match: Match): boolean {
   return Boolean(match.team1_id && match.team2_id);
@@ -58,30 +38,6 @@ function LockedPredictionCard({ match, forceTeamsTBD }: { match: Match; forceTea
       </p>
     </div>
   );
-}
-
-function filterMatches(
-  matches: Match[],
-  group: string | null,
-  search: string,
-  teamNames: Map<string, string>
-): Match[] {
-  return matches.filter((m) => {
-    if (group) {
-      if (group === "knockout") {
-        if (m.round === "Group Stage") return false;
-      } else {
-        if (m.group_letter !== group.toUpperCase()) return false;
-      }
-    }
-    if (search) {
-      const q = search.toLowerCase();
-      const t1 = (m.team1_id ? teamNames.get(m.team1_id) ?? m.team1_code : m.team1_code).toLowerCase();
-      const t2 = (m.team2_id ? teamNames.get(m.team2_id) ?? m.team2_code : m.team2_code).toLowerCase();
-      if (!t1.includes(q) && !t2.includes(q)) return false;
-    }
-    return true;
-  });
 }
 
 // ============================================================================

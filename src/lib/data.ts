@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
+import { aggregateGoalsFromMatchEvents } from "./scorer-aggregation";
 import type { Match, MatchEvent, Standing, Team, TopScorer } from "./types";
 
 /** id -> display name, for resolving team_id columns in the UI. */
@@ -214,39 +215,17 @@ export async function getTopScorers(): Promise<ScorerRow[]> {
   if (rows.length > 0) return rows;
 
   // Fallback: compute directly from match_events so admin-entered goals are
-  // never silently lost due to a failed write to top_scorers.
-  const { data: events, error: evErr } = await supabase
-    .from("match_events")
-    .select("player_name, team_id, event_type")
-    .in("event_type", ["goal", "penalty_goal"])
-    .not("player_name", "is", null);
+  // never silently lost due to a failed write to top_scorers. Shared with
+  // sync.ts's buildScorersFromEvents() via aggregateGoalsFromMatchEvents().
+  const aggregated = await aggregateGoalsFromMatchEvents(supabase);
+  if (!aggregated.length) return [];
 
-  if (evErr || !events?.length) return [];
-
-  // Build team name map.
-  const { data: teams } = await supabase.from("teams").select("id, name");
-  const teamNameById = new Map<string, string>(
-    ((teams ?? []) as { id: string; name: string }[]).map((t) => [t.id, t.name])
-  );
-
-  const counts = new Map<string, { goals: number; teamId: string | null; teamName: string | null }>();
-  for (const ev of events as { player_name: string | null; team_id: string | null; event_type: string }[]) {
-    if (!ev.player_name) continue;
-    const prev = counts.get(ev.player_name) ?? { goals: 0, teamId: ev.team_id, teamName: ev.team_id ? (teamNameById.get(ev.team_id) ?? null) : null };
-    prev.goals += 1;
-    counts.set(ev.player_name, prev);
-  }
-
-  const fallback = Array.from(counts.entries())
-    .map(([name, { goals, teamId, teamName }]) => ({ name, goals, teamId, teamName }))
-    .sort((a, b) => b.goals - a.goals);
-
-  return fallback.map((s, i) => ({
+  return aggregated.map((s, i) => ({
     id: `fallback-${i}`,
     player_id: null,
     player_name: s.name,
-    team_id: s.teamId ?? null,
-    team_name: s.teamName ?? null,
+    team_id: s.teamId,
+    team_name: s.teamName,
     goals: s.goals,
     assists: 0,
     rank: i + 1,
@@ -380,9 +359,28 @@ export async function getFirstMatchKickoff(): Promise<string | null> {
   return data?.kickoff_at ?? null;
 }
 
-/** Most recent sync timestamp. */
+/**
+ * Most recent sync timestamp.
+ *
+ * Primary source: sync_state, written by runSync() on every successful run
+ * (see sync.ts) -- reflects when the sync job actually executed.
+ *
+ * Fallback: MAX(matches.updated_at). Used until migration 0011 has been
+ * applied and/or a sync has completed at least once since. Note this
+ * fallback can read as more recent than the last *sync* if a match row was
+ * edited directly (e.g. an admin correction) -- that's the exact staleness
+ * issue sync_state exists to fix, so prefer it whenever it's present.
+ */
 export async function getLastSyncedAt(): Promise<string | null> {
   const supabase = createServerSupabaseClient();
+
+  const { data: syncState, error: syncStateErr } = await supabase
+    .from("sync_state")
+    .select("last_synced_at")
+    .eq("id", true)
+    .maybeSingle();
+  if (!syncStateErr && syncState?.last_synced_at) return syncState.last_synced_at;
+
   const { data, error } = await supabase
     .from("matches")
     .select("updated_at")

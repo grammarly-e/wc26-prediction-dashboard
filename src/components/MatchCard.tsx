@@ -30,31 +30,6 @@ function actualOutcome(home: number, away: number): "home" | "draw" | "away" {
   return "draw";
 }
 
-// ── Score distribution helpers ────────────────────────────────────────────────
-
-interface ScoreBucket {
-  score: string;
-  count: number;
-  isActual: boolean;
-}
-
-function buildScoreDistribution(
-  predictions: MatchPredictionReveal[],
-  actualHome: number | null,
-  actualAway: number | null,
-): ScoreBucket[] {
-  const counts = new Map<string, number>();
-  for (const p of predictions) {
-    const key = `${p.predicted_home}-${p.predicted_away}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const actualKey =
-    actualHome !== null && actualAway !== null ? `${actualHome}-${actualAway}` : null;
-  return Array.from(counts.entries())
-    .map(([score, count]) => ({ score, count, isActual: score === actualKey }))
-    .sort((a, b) => b.count - a.count || (a.isActual ? -1 : b.isActual ? 1 : 0));
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function MatchCard({
@@ -287,60 +262,6 @@ function OutcomeBar({
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
       </div>
-    </div>
-  );
-}
-
-function ScoreDistribution({
-  predictions,
-  actualHome,
-  actualAway,
-}: {
-  predictions: MatchPredictionReveal[];
-  actualHome: number | null;
-  actualAway: number | null;
-}) {
-  const buckets = buildScoreDistribution(predictions, actualHome, actualAway);
-  const maxCount = Math.max(...buckets.map((b) => b.count));
-  const shown = buckets.slice(0, 5);
-  const rest = buckets.length - shown.length;
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
-        Score predictions
-      </p>
-      {shown.map((b) => (
-        <div
-          key={b.score}
-          className={`flex items-center gap-2 text-xs ${b.isActual ? "text-emerald-700" : "text-neutral-600"}`}
-        >
-          <span
-            className={`w-10 shrink-0 text-right font-mono tabular-nums ${b.isActual ? "font-bold" : ""}`}
-          >
-            {b.score}
-          </span>
-          <div className="flex flex-1 items-center gap-1.5">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-neutral-100">
-              <div
-                className={`h-full rounded-full transition-all ${b.isActual ? "bg-emerald-400" : "bg-neutral-300"}`}
-                style={{ width: `${Math.round((b.count / maxCount) * 100)}%` }}
-              />
-            </div>
-            <span
-              className={`w-4 shrink-0 text-right tabular-nums ${b.isActual ? "font-semibold" : "text-neutral-400"}`}
-            >
-              {b.count}
-            </span>
-            {b.isActual && <span className="text-emerald-500">{"✓"}</span>}
-          </div>
-        </div>
-      ))}
-      {rest > 0 && (
-        <p className="text-[10px] text-neutral-400">
-          +{rest} other {rest === 1 ? "score" : "scores"} predicted
-        </p>
-      )}
     </div>
   );
 }

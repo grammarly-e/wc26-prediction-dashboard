@@ -13,67 +13,12 @@ import {
   getMatchInsights,
   type MatchInsight,
 } from "@/lib/predictions";
-import type { Match, MatchRound } from "@/lib/types";
+import { ROUND_ORDER, filterMatches, groupByRound, sortMatchesForDisplay } from "@/lib/match-utils";
+import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
 
-const ROUND_ORDER: MatchRound[] = [
-  "Group Stage",
-  "Round of 32",
-  "Round of 16",
-  "Quarter-final",
-  "Semi-final",
-  "Match for third place",
-  "Final",
-];
-
 const MIN_INSIGHT_SAMPLE = 3;
-
-function filterMatches(
-  matches: Match[],
-  group: string | null,
-  search: string,
-  teamNames: Map<string, string>
-): Match[] {
-  return matches.filter((m) => {
-    if (group) {
-      if (group === "knockout") {
-        if (m.round === "Group Stage") return false;
-      } else {
-        if (m.group_letter !== group.toUpperCase()) return false;
-      }
-    }
-    if (search) {
-      const q = search.toLowerCase();
-      const t1 = (m.team1_id ? teamNames.get(m.team1_id) ?? m.team1_code : m.team1_code).toLowerCase();
-      const t2 = (m.team2_id ? teamNames.get(m.team2_id) ?? m.team2_code : m.team2_code).toLowerCase();
-      if (!t1.includes(q) && !t2.includes(q)) return false;
-    }
-    return true;
-  });
-}
-
-function groupByRound(matches: Match[]): Map<MatchRound, Match[]> {
-  const grouped = new Map<MatchRound, Match[]>();
-  for (const round of ROUND_ORDER) grouped.set(round, []);
-  for (const m of matches) {
-    const list = grouped.get(m.round) ?? [];
-    list.push(m);
-    grouped.set(m.round, list);
-  }
-  return grouped;
-}
-
-const STATUS_SORT_ORDER: Record<string, number> = { live: 0, scheduled: 1, postponed: 2, finished: 3 };
-
-function sortMatchesForDisplay(matches: Match[]): Match[] {
-  return [...matches].sort((a, b) => {
-    const sa = STATUS_SORT_ORDER[a.status] ?? 99;
-    const sb = STATUS_SORT_ORDER[b.status] ?? 99;
-    if (sa !== sb) return sa - sb;
-    return new Date(a.kickoff_at).getTime() - new Date(b.kickoff_at).getTime();
-  });
-}
 
 interface InsightCallout {
   match: Match;

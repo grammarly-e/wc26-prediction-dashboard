@@ -14,6 +14,7 @@
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import { scoreMatchPrediction } from "./scoring";
+import { isKnockoutRound } from "./match-utils";
 import type {
   LeaderboardRow,
   Match,
@@ -89,12 +90,12 @@ export interface StageLeaderboardRow {
   display_name: string;
   group_stage_points: number;
   group_stage_matches_scored: number;
+  group_stage_exact_hits: number;
+  group_stage_correct_outcomes: number;
   knockout_points: number;
   knockout_matches_scored: number;
-}
-
-function isKnockoutRound(round: Match["round"]): boolean {
-  return round !== "Group Stage";
+  knockout_exact_hits: number;
+  knockout_correct_outcomes: number;
 }
 
 // ============================================================================
@@ -157,9 +158,8 @@ export async function getStageLeaderboards(): Promise<{
   if (predictionsRes.error) throw predictionsRes.error;
   if (participantsRes.error) throw participantsRes.error;
 
-  const nameById = new Map(
-    (participantsRes.data as Array<{ id: string; display_name: string }>).map((p) => [p.id, p.display_name])
-  );
+  const participantsList = participantsRes.data as Array<{ id: string; display_name: string }>;
+  const nameById = new Map(participantsList.map((p) => [p.id, p.display_name]));
 
   const totals = new Map<string, StageLeaderboardRow>();
   function rowFor(participantId: string): StageLeaderboardRow {
@@ -170,13 +170,22 @@ export async function getStageLeaderboards(): Promise<{
         display_name: nameById.get(participantId) ?? "Unknown",
         group_stage_points: 0,
         group_stage_matches_scored: 0,
+        group_stage_exact_hits: 0,
+        group_stage_correct_outcomes: 0,
         knockout_points: 0,
         knockout_matches_scored: 0,
+        knockout_exact_hits: 0,
+        knockout_correct_outcomes: 0,
       };
       totals.set(participantId, row);
     }
     return row;
   }
+
+  // Pre-seed every participant so both stage leaderboards are fully
+  // populated from day one — the knockout table shows everyone at 0 points
+  // rather than disappearing until the first knockout match finishes.
+  for (const p of participantsList) rowFor(p.id);
 
   for (const pred of predictionsRes.data as unknown as Array<{
     participant_id: string;
@@ -187,7 +196,7 @@ export async function getStageLeaderboards(): Promise<{
     if (!pred.matches || pred.matches.home_score === null || pred.matches.away_score === null) continue;
 
     // Compute points using the same rules as scoring.ts / migration 0010
-    const { points } = scoreMatchPrediction({
+    const { points, breakdown } = scoreMatchPrediction({
       predictedHome: pred.predicted_home,
       predictedAway: pred.predicted_away,
       actualHome: pred.matches.home_score,
@@ -198,16 +207,30 @@ export async function getStageLeaderboards(): Promise<{
     if (isKnockoutRound(pred.matches.round)) {
       row.knockout_points += points;
       row.knockout_matches_scored += 1;
+      if (breakdown.exact_score) row.knockout_exact_hits += 1;
+      if (breakdown.correct_outcome) row.knockout_correct_outcomes += 1;
     } else {
       row.group_stage_points += points;
       row.group_stage_matches_scored += 1;
+      if (breakdown.exact_score) row.group_stage_exact_hits += 1;
+      if (breakdown.correct_outcome) row.group_stage_correct_outcomes += 1;
     }
   }
 
   const all = Array.from(totals.values());
   return {
-    groupStage: [...all].sort((a, b) => b.group_stage_points - a.group_stage_points),
-    knockout: [...all].sort((a, b) => b.knockout_points - a.knockout_points),
+    groupStage: [...all].sort(
+      (a, b) =>
+        b.group_stage_points - a.group_stage_points ||
+        b.group_stage_exact_hits - a.group_stage_exact_hits ||
+        a.display_name.localeCompare(b.display_name)
+    ),
+    knockout: [...all].sort(
+      (a, b) =>
+        b.knockout_points - a.knockout_points ||
+        b.knockout_exact_hits - a.knockout_exact_hits ||
+        a.display_name.localeCompare(b.display_name)
+    ),
   };
 }
 

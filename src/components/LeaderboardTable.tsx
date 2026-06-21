@@ -4,24 +4,18 @@ import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
+import { isKnockoutRound } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
+import type { StageLeaderboardRow } from "@/lib/predictions";
 
 const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
-export interface LeaderboardTableRow {
-  participant_id: string;
-  display_name: string;
-  rank: number;
-  total_points: number;
-  match_points: number;
-  tournament_points: number;
-  exact_score_hits: number;
-  group_stage_points: number;
-  knockout_points: number;
-}
+type Stage = "group" | "knockout";
 
 interface Props {
-  rows: LeaderboardTableRow[];
+  /** Which independent leaderboard this table renders — group stage or knockout. */
+  stage: Stage;
+  rows: StageLeaderboardRow[];
   currentParticipantId: string | null;
   breakdowns: Map<string, MatchPrediction[]>;
   matches: Map<string, Match>;
@@ -33,8 +27,6 @@ interface Props {
    * favourite picks that hit. Omit before the Final is played.
    */
   favouriteHits?: Record<string, number>;
-  /** participant_id -> {correct, total} W/D/L prediction accuracy. */
-  outcomeAccuracy?: Map<string, { correct: number; total: number }>;
 }
 
 // Green=exact(5), Blue=goal diff(3), Yellow=W/D/L(1), Red=wrong(0)
@@ -85,19 +77,35 @@ const PICK_RESULT_LABELS: Record<PickResult, string> = {
   pending:     "Awaiting kickoff",
 };
 
-export default function LeaderboardTable({ rows, currentParticipantId, breakdowns, matches, teamNames, allFavPicks, favouriteHits, outcomeAccuracy }: Props) {
+// Stage-aware accessors — keep the table generic over the group/knockout
+// fields on StageLeaderboardRow instead of branching everywhere below.
+function stagePoints(row: StageLeaderboardRow, stage: Stage): number {
+  return stage === "group" ? row.group_stage_points : row.knockout_points;
+}
+function stageMatchesScored(row: StageLeaderboardRow, stage: Stage): number {
+  return stage === "group" ? row.group_stage_matches_scored : row.knockout_matches_scored;
+}
+function stageExactHits(row: StageLeaderboardRow, stage: Stage): number {
+  return stage === "group" ? row.group_stage_exact_hits : row.knockout_exact_hits;
+}
+function stageCorrectOutcomes(row: StageLeaderboardRow, stage: Stage): number {
+  return stage === "group" ? row.group_stage_correct_outcomes : row.knockout_correct_outcomes;
+}
+
+export default function LeaderboardTable({ stage, rows, currentParticipantId, breakdowns, matches, teamNames, allFavPicks, favouriteHits }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [prevRanks, setPrevRanks] = useState<Record<string, number>>({});
 
-  // Re-sort using W/D/L accuracy as final tiebreaker (after points, then exact_score_hits).
+  // Sort by this stage's points, then exact hits, then name — the same
+  // tiebreak chain getStageLeaderboards() already applies server-side;
+  // re-sorting here just makes the table resilient to caller ordering.
   const sortedRows = [...rows].sort((a, b) => {
-    if (b.total_points !== a.total_points) return b.total_points - a.total_points;
-    if (b.exact_score_hits !== a.exact_score_hits) return b.exact_score_hits - a.exact_score_hits;
-    const accA = outcomeAccuracy?.get(a.participant_id);
-    const accB = outcomeAccuracy?.get(b.participant_id);
-    const pctA = accA && accA.total > 0 ? accA.correct / accA.total : 0;
-    const pctB = accB && accB.total > 0 ? accB.correct / accB.total : 0;
-    if (pctB !== pctA) return pctB - pctA;
+    const ptsA = stagePoints(a, stage);
+    const ptsB = stagePoints(b, stage);
+    if (ptsB !== ptsA) return ptsB - ptsA;
+    const exA = stageExactHits(a, stage);
+    const exB = stageExactHits(b, stage);
+    if (exB !== exA) return exB - exA;
     return a.display_name.localeCompare(b.display_name);
   });
 
@@ -108,36 +116,35 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
     if (i > 0) {
       const prev = sortedRows[i - 1];
       const curr = sortedRows[i];
-      const accPrev = outcomeAccuracy?.get(prev.participant_id);
-      const accCurr = outcomeAccuracy?.get(curr.participant_id);
-      const pctPrev = accPrev && accPrev.total > 0 ? accPrev.correct / accPrev.total : 0;
-      const pctCurr = accCurr && accCurr.total > 0 ? accCurr.correct / accCurr.total : 0;
       const tied =
-        prev.total_points === curr.total_points &&
-        prev.exact_score_hits === curr.exact_score_hits &&
-        Math.abs(pctPrev - pctCurr) < 1e-9;
+        stagePoints(prev, stage) === stagePoints(curr, stage) &&
+        stageExactHits(prev, stage) === stageExactHits(curr, stage);
       if (!tied) currentRank = i + 1;
     }
     displayRank[sortedRows[i].participant_id] = currentRank;
   }
+
+  // Stage-specific storage key so the two tables on /leaderboard don't
+  // clobber each other's "daily snapshot" baseline.
+  const storageKey = `wc2026_lb_daily_${stage}`;
 
   useEffect(() => {
     // Daily delta: compare against the first snapshot taken today.
     // Use displayRank (not DB rank) so baseline and current values are on the same ranking system.
     const today = new Date().toISOString().slice(0, 10);
     const current: Record<string, number> = {};
-    for (const row of rows) current[row.participant_id] = displayRank[row.participant_id] ?? row.rank;
+    for (const row of rows) current[row.participant_id] = displayRank[row.participant_id];
     try {
-      const raw = localStorage.getItem("wc2026_lb_daily");
+      const raw = localStorage.getItem(storageKey);
       if (raw) {
         const stored = JSON.parse(raw) as { date: string; baseline: Record<string, number> };
         if (stored.date === today) {
           setPrevRanks(stored.baseline);
         } else {
-          localStorage.setItem("wc2026_lb_daily", JSON.stringify({ date: today, baseline: current }));
+          localStorage.setItem(storageKey, JSON.stringify({ date: today, baseline: current }));
         }
       } else {
-        localStorage.setItem("wc2026_lb_daily", JSON.stringify({ date: today, baseline: current }));
+        localStorage.setItem(storageKey, JSON.stringify({ date: today, baseline: current }));
       }
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,22 +157,31 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
           <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
             <th className="px-4 py-3 font-semibold">Rank</th>
             <th className="px-4 py-3 font-semibold">Participant</th>
-            <th className="px-4 py-3 text-right font-semibold">Total</th>
-            <th className="px-4 py-3 text-right font-semibold" title="Match-prediction points scored in the group stage">Group</th>
-            <th className="px-4 py-3 text-right font-semibold" title="Match-prediction points scored in the knockout rounds">Knockout</th>
+            <th
+              className="px-4 py-3 text-right font-semibold"
+              title={`Match-prediction points scored in the ${stage === "group" ? "group stage" : "knockout rounds"}`}
+            >
+              Points
+            </th>
             <th className="px-4 py-3 text-right font-semibold" title="Exact scoreline predictions (5 pts each)">Exact</th>
-            <th className="px-4 py-3 text-right font-semibold" title="Correct W/D/L outcome predictions out of all finished matches">W/D/L %</th>
+            <th className="px-4 py-3 text-right font-semibold" title="Correct W/D/L outcome predictions out of all finished matches in this stage">W/D/L %</th>
           </tr>
         </thead>
         <tbody>
           {sortedRows.map((row) => {
             const isMe = currentParticipantId === row.participant_id;
             const isOpen = expanded === row.participant_id;
-            const picks = breakdowns.get(row.participant_id) ?? [];
+            // Only this stage's picks count toward the streak / breakdown shown when expanded.
+            const picks = (breakdowns.get(row.participant_id) ?? []).filter((p) => {
+              const m = matches.get(p.match_id);
+              if (!m) return false;
+              return stage === "knockout" ? isKnockoutRound(m.round) : !isKnockoutRound(m.round);
+            });
             const favHits = favouriteHits?.[row.participant_id] ?? 0;
             const favTeams = allFavPicks?.get(row.participant_id) ?? [];
-            const acc = outcomeAccuracy?.get(row.participant_id);
-            const wdlPct = acc && acc.total > 0 ? Math.round((acc.correct / acc.total) * 100) : null;
+            const matchesScored = stageMatchesScored(row, stage);
+            const correctOutcomes = stageCorrectOutcomes(row, stage);
+            const wdlPct = matchesScored > 0 ? Math.round((correctOutcomes / matchesScored) * 100) : null;
             const streak = getHotStreak(picks, matches);
             return (
               <Fragment key={row.participant_id}>
@@ -220,17 +236,15 @@ export default function LeaderboardTable({ rows, currentParticipantId, breakdown
                       )}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{row.total_points}</td>
-                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.group_stage_points}</td>
-                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.knockout_points}</td>
-                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{row.exact_score_hits}</td>
+                  <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{stagePoints(row, stage)}</td>
+                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{stageExactHits(row, stage)}</td>
                   <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">
                     {wdlPct !== null ? `${wdlPct}%` : <span className="text-neutral-300">--</span>}
                   </td>
                 </tr>
                 {isOpen && (
                   <tr className="border-b border-neutral-100 last:border-0">
-                    <td colSpan={7} className="bg-neutral-50/60 px-4 py-3">
+                    <td colSpan={5} className="bg-neutral-50/60 px-4 py-3">
                       <PredictionBreakdown
                         displayName={row.display_name}
                         picks={picks}

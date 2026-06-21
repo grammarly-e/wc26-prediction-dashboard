@@ -2,17 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { ROUND_ORDER, groupByRound } from "@/lib/match-utils";
 import type { Match, MatchStatus } from "@/lib/types";
-
-const ROUND_ORDER = [
-  "Group Stage",
-  "Round of 32",
-  "Round of 16",
-  "Quarter-final",
-  "Semi-final",
-  "Match for third place",
-  "Final",
-] as const;
 
 const STATUS_OPTIONS: MatchStatus[] = [
   "scheduled",
@@ -103,13 +94,7 @@ export default function AdminDashboard({
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Build round -> match map
-  const grouped = new Map<string, Match[]>();
-  for (const round of ROUND_ORDER) grouped.set(round, []);
-  for (const m of matches) {
-    const list = grouped.get(m.round) ?? [];
-    list.push(m);
-    grouped.set(m.round, list);
-  }
+  const grouped = groupByRound(matches);
 
   function startEdit(match: Match) {
     setEditingId(match.id);

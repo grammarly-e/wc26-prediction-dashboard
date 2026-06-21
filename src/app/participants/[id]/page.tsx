@@ -7,6 +7,7 @@ import {
   getParticipantMatchPredictions,
   getLeaderboard,
 } from "@/lib/predictions";
+import { ROUND_ORDER, groupByRound, sortMatchesForDisplay } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
@@ -40,16 +41,6 @@ const TIER_LABEL: Record<PickTier, string> = {
   pending:     "Not yet played",
 };
 
-const ROUND_ORDER = [
-  "Group Stage",
-  "Round of 32",
-  "Round of 16",
-  "Quarter-final",
-  "Semi-final",
-  "Match for third place",
-  "Final",
-] as const;
-
 const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -81,13 +72,11 @@ export default async function ParticipantPage({
   const totalPoints = lbRow?.total_points ?? 0;
 
   // Group matches by round (only include rounds the participant has a pick for,
-  // OR the round has matches in the schedule — show all rounds)
-  const byRound = new Map<string, Match[]>();
-  for (const round of ROUND_ORDER) byRound.set(round, []);
-  for (const m of allMatches) {
-    const list = byRound.get(m.round) ?? [];
-    list.push(m);
-    byRound.set(m.round, list);
+  // OR the round has matches in the schedule — show all rounds), then sort each
+  // round so incomplete matches (live/scheduled) surface before finished ones.
+  const byRound = groupByRound(allMatches);
+  for (const [round, roundMatches] of byRound) {
+    byRound.set(round, sortMatchesForDisplay(roundMatches));
   }
 
   // Summary counts (4 tiers)

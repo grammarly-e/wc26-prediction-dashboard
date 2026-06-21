@@ -1,9 +1,8 @@
 import Link from "next/link";
 
-import { getLastSyncedAt, getMatches, getTeamNameMap, getOutcomeAccuracy, getTopScorers } from "@/lib/data";
+import { getLastSyncedAt, getMatches, getTeamNameMap, getTopScorers } from "@/lib/data";
 import {
   getCurrentParticipant,
-  getLeaderboard,
   getStageLeaderboards,
   getVisibleMatchPredictionsByParticipant,
   getAwardPicks,
@@ -11,7 +10,7 @@ import {
   type StageLeaderboardRow,
   type AwardPickRow,
 } from "@/lib/predictions";
-import LeaderboardTable, { type LeaderboardTableRow } from "@/components/LeaderboardTable";
+import LeaderboardTable from "@/components/LeaderboardTable";
 import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
@@ -249,9 +248,8 @@ const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
 // \u2500\u2500 Page \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 export default async function LeaderboardPage() {
-  const [rows, participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, outcomeAccuracy, topScorers, ...awardPicksArrays] =
+  const [participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, topScorers, ...awardPicksArrays] =
     await Promise.all([
-      getLeaderboard(),
       getCurrentParticipant(),
       getLastSyncedAt(),
       getStageLeaderboards(),
@@ -259,12 +257,21 @@ export default async function LeaderboardPage() {
       getMatches(),
       getTeamNameMap(),
       getAllFavouritePicks(),
-      getOutcomeAccuracy(),
       getTopScorers(),
       ...AWARD_CATEGORIES.map((c) => getAwardPicks(c.key)),
     ]);
 
-  const myRow = participant ? rows.find((r) => r.participant_id === participant.id) : undefined;
+  // Two fully independent rankings — no combined "total points" concept on
+  // this page. Index-based rank here is a lightweight summary for the
+  // personal banner only; the tables below compute their own tie-aware rank.
+  const myGroupIndex = participant
+    ? stageLeaderboards.groupStage.findIndex((r) => r.participant_id === participant.id)
+    : -1;
+  const myKnockoutIndex = participant
+    ? stageLeaderboards.knockout.findIndex((r) => r.participant_id === participant.id)
+    : -1;
+  const myGroupRow = myGroupIndex >= 0 ? stageLeaderboards.groupStage[myGroupIndex] : undefined;
+  const myKnockoutRow = myKnockoutIndex >= 0 ? stageLeaderboards.knockout[myKnockoutIndex] : undefined;
 
   const matchById = new Map(matches.map((m) => [m.id, m]));
 
@@ -272,25 +279,6 @@ export default async function LeaderboardPage() {
   const goalsByPlayer = new Map<string, number>(
     (topScorers as Array<{ player_name: string; goals: number }>).map((s) => [s.player_name, s.goals])
   );
-  const stageById = new Map<string, StageLeaderboardRow>();
-  for (const r of [...stageLeaderboards.groupStage, ...stageLeaderboards.knockout]) {
-    stageById.set(r.participant_id, r);
-  }
-
-  const tableRows: LeaderboardTableRow[] = rows.map((row) => {
-    const stage = stageById.get(row.participant_id);
-    return {
-      participant_id: row.participant_id,
-      display_name: row.display_name,
-      rank: row.rank,
-      total_points: row.total_points,
-      match_points: row.match_points,
-      tournament_points: row.tournament_points,
-      exact_score_hits: row.exact_score_hits,
-      group_stage_points: stage?.group_stage_points ?? 0,
-      knockout_points: stage?.knockout_points ?? 0,
-    };
-  });
 
   // Build per-participant favourite team names for the dropdown
   const allFavPicksMap = new Map<string, string[]>();
@@ -346,7 +334,7 @@ export default async function LeaderboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Ranked by match prediction points. 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Exact scores break ties; W/D/L % is the final tiebreaker.
+            Two independent rankings: Group Stage and Knockout Stage. Each is scored separately &mdash; 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Exact scores break ties within a stage.
             Click a row to expand inline, or click a name to see their full prediction sheet.
           </p>
         </div>
@@ -378,29 +366,35 @@ export default async function LeaderboardPage() {
         />
       </div>
 
-      {myRow && (
+      {(myGroupRow || myKnockoutRow) && (
         <div className="card flex flex-wrap items-center gap-x-8 gap-y-2 bg-pitch p-4 text-gold">
           <div>
             <p className="text-xs uppercase tracking-wide text-gold/70">Your standing</p>
-            <p className="text-lg font-bold">
-              {MEDALS[myRow.rank] ?? `#${myRow.rank}`} of {rows.length}
-            </p>
+            <p className="text-lg font-bold">{participant?.display_name}</p>
           </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Match points</p>
-            <p className="text-lg font-bold tabular-nums">{myRow.match_points}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gold/70">Best calls</p>
-            <p className="text-lg font-bold tabular-nums">{myRow.exact_score_hits}</p>
-          </div>
+          {myGroupRow && (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gold/70">Group stage</p>
+              <p className="text-lg font-bold tabular-nums">
+                {MEDALS[myGroupIndex + 1] ?? `#${myGroupIndex + 1}`} &middot; {myGroupRow.group_stage_points} pts
+              </p>
+            </div>
+          )}
+          {myKnockoutRow && (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gold/70">Knockout stage</p>
+              <p className="text-lg font-bold tabular-nums">
+                {MEDALS[myKnockoutIndex + 1] ?? `#${myKnockoutIndex + 1}`} &middot; {myKnockoutRow.knockout_points} pts
+              </p>
+            </div>
+          )}
           <Link href="/predictions" className="ml-auto text-xs font-semibold underline-offset-2 hover:underline">
             Predict scores &rarr;
           </Link>
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {stageLeaderboards.groupStage.length === 0 ? (
         <div className="card p-6 text-center text-sm text-neutral-500">
           Nobody&rsquo;s on the board yet &mdash;{" "}
           <a href="/predictions" className="font-semibold text-pitch hover:underline">
@@ -409,15 +403,32 @@ export default async function LeaderboardPage() {
           .
         </div>
       ) : (
-        <LeaderboardTable
-          rows={tableRows}
-          currentParticipantId={participant?.id ?? null}
-          breakdowns={breakdowns}
-          matches={matchById}
-          teamNames={teamNames}
-          allFavPicks={allFavPicksMap}
-          outcomeAccuracy={outcomeAccuracy}
-        />
+        <div className="flex flex-col gap-6">
+          <section>
+            <h2 className="mb-3 font-semibold">Group Stage Leaderboard</h2>
+            <LeaderboardTable
+              stage="group"
+              rows={stageLeaderboards.groupStage}
+              currentParticipantId={participant?.id ?? null}
+              breakdowns={breakdowns}
+              matches={matchById}
+              teamNames={teamNames}
+              allFavPicks={allFavPicksMap}
+            />
+          </section>
+          <section>
+            <h2 className="mb-3 font-semibold">Knockout Stage Leaderboard</h2>
+            <LeaderboardTable
+              stage="knockout"
+              rows={stageLeaderboards.knockout}
+              currentParticipantId={participant?.id ?? null}
+              breakdowns={breakdowns}
+              matches={matchById}
+              teamNames={teamNames}
+              allFavPicks={allFavPicksMap}
+            />
+          </section>
+        </div>
       )}
 
       {anyKnockoutPlayed && <FavouritesLeaderboard rows={favLeaderRows} tournamentOver={tournamentOver} />}

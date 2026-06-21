@@ -57,15 +57,44 @@ export async function GET() {
       }
     }
 
-    // --- Check last sync time --------------------------------------------
-    const { data: latest } = await supabase
-      .from("matches")
-      .select("updated_at")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // --- Determine last sync time ------------------------------------------
+    // Primary source: sync_state, written by runSync() on every successful
+    // run (see migration 0011 + src/lib/sync.ts) -- reflects when the sync
+    // job actually executed, not just when some row happened to change.
+    // matches.updated_at is also bumped by unrelated admin edits (e.g. a
+    // manual score correction), which would otherwise make this check think
+    // a real sync "just happened" and incorrectly skip one that's overdue.
+    //
+    // Fallback 1: the most recently updated row from the live/finished query
+    // above, already fetched and already sorted desc -- avoids a second
+    // round trip in the common case where sync_state isn't populated yet.
+    // Fallback 2: a fresh MAX(matches.updated_at) across ALL matches, only
+    // reached when there are no live/finished matches at all (e.g. before
+    // the tournament starts) and sync_state hasn't been written to yet
+    // either -- this preserves the original endpoint's behaviour for that
+    // edge case exactly.
+    let lastSyncedAt: string | null = null;
 
-    const lastSyncedAt = latest?.updated_at ?? null;
+    const { data: syncState } = await supabase
+      .from("sync_state")
+      .select("last_synced_at")
+      .eq("id", true)
+      .maybeSingle();
+    lastSyncedAt = syncState?.last_synced_at ?? null;
+
+    if (!lastSyncedAt && matches?.length) {
+      lastSyncedAt = matches[0].updated_at;
+    }
+
+    if (!lastSyncedAt) {
+      const { data: latest } = await supabase
+        .from("matches")
+        .select("updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      lastSyncedAt = latest?.updated_at ?? null;
+    }
 
     if (lastSyncedAt) {
       const ageMs = now - new Date(lastSyncedAt).getTime();

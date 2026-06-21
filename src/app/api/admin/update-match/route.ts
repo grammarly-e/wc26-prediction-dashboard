@@ -49,18 +49,25 @@ export async function POST(request: Request) {
       .eq("match_id", body.matchId);
 
     if (!predErr && predictions && predictions.length > 0) {
-      for (const p of predictions as { id: string; predicted_home: number; predicted_away: number }[]) {
-        const { points, breakdown } = scoreMatchPrediction({
-          predictedHome: p.predicted_home,
-          predictedAway: p.predicted_away,
-          actualHome: body.homeScore,
-          actualAway: body.awayScore,
-        });
-        await supabase
-          .from("match_predictions")
-          .update({ points_awarded: points, score_breakdown: breakdown })
-          .eq("id", p.id);
-      }
+      const actualHome = body.homeScore;
+      const actualAway = body.awayScore;
+      // Batched: independent per-prediction writes, no need to serialize.
+      await Promise.all(
+        (predictions as { id: string; predicted_home: number; predicted_away: number }[]).map(
+          async (p) => {
+            const { points, breakdown } = scoreMatchPrediction({
+              predictedHome: p.predicted_home,
+              predictedAway: p.predicted_away,
+              actualHome,
+              actualAway,
+            });
+            await supabase
+              .from("match_predictions")
+              .update({ points_awarded: points, score_breakdown: breakdown })
+              .eq("id", p.id);
+          }
+        )
+      );
     }
 
     // Await recompute so standings are updated before the client refreshes.
