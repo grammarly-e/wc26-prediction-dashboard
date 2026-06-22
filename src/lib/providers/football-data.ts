@@ -58,8 +58,42 @@ export interface ProviderMatch {
   awayTeam: { id: number; name: string; shortName: string | null; tla: string | null };
   score: {
     winner: "HOME_TEAM" | "AWAY_TEAM" | "DRAW" | null;
+    // Defaults to REGULAR; EXTRA_TIME/PENALTY_SHOOTOUT only show up on
+    // knockout fixtures that needed extra periods. See overtime.html docs:
+    // https://docs.football-data.org/general/v4/overtime.html
+    duration: "REGULAR" | "EXTRA_TIME" | "PENALTY_SHOOTOUT";
+    // "Running total" score — for PENALTY_SHOOTOUT matches this includes the
+    // shootout goals added on top of the 90+ET score (e.g. a 1-1 draw decided
+    // 6-5 on penalties comes back as fullTime 7-6). Use
+    // regulationAndExtraTimeScore() below to strip the shootout back out.
     fullTime: { home: number | null; away: number | null };
     halfTime: { home: number | null; away: number | null };
+    regularTime?: { home: number | null; away: number | null };
+    extraTime?: { home: number | null; away: number | null };
+    // Only the goals scored within the shootout itself — appears once
+    // duration is PENALTY_SHOOTOUT.
+    penalties?: { home: number | null; away: number | null };
+  };
+}
+
+/**
+ * The score after 90 minutes + extra time, deliberately excluding penalty
+ * shootout goals — so a knockout match decided on penalties still registers
+ * as the draw it was in open play (W/D/L), rather than as a "win" for
+ * whoever won the shootout. REGULAR and EXTRA_TIME duration matches are
+ * unaffected; fullTime is already the right number for those.
+ */
+export function regulationAndExtraTimeScore(
+  score: ProviderMatch["score"]
+): { home: number | null; away: number | null } {
+  if (score.duration !== "PENALTY_SHOOTOUT" || !score.penalties) {
+    return score.fullTime;
+  }
+  const { home: ftHome, away: ftAway } = score.fullTime;
+  const { home: penHome, away: penAway } = score.penalties;
+  return {
+    home: ftHome !== null ? ftHome - (penHome ?? 0) : null,
+    away: ftAway !== null ? ftAway - (penAway ?? 0) : null,
   };
 }
 

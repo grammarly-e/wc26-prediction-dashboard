@@ -50,7 +50,9 @@ async function rebuildTopScorers(): Promise<string | null> {
 
   const scorers = Array.from(counts.entries())
     .map(([name, { goals, teamId }]) => ({ name, goals, teamId }))
-    .sort((a, b) => b.goals - a.goals);
+    // Goals first, then name — keeps players tied on goals in a stable,
+    // alphabetical order instead of Map insertion order.
+    .sort((a, b) => b.goals - a.goals || a.name.localeCompare(b.name));
 
   const { error: delErr } = await supabase
     .from("top_scorers")

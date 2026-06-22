@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
-import { isKnockoutRound } from "@/lib/match-utils";
+import { correctOutcomeRate, isKnockoutRound } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 import type { StageLeaderboardRow } from "@/lib/predictions";
 
@@ -96,13 +96,20 @@ export default function LeaderboardTable({ stage, rows, currentParticipantId, br
   const [expanded, setExpanded] = useState<string | null>(null);
   const [prevRanks, setPrevRanks] = useState<Record<string, number>>({});
 
-  // Sort by this stage's points, then exact hits, then name — the same
-  // tiebreak chain getStageLeaderboards() already applies server-side;
-  // re-sorting here just makes the table resilient to caller ordering.
+  // Sort by this stage's points, then W/D/L correct-outcome rate, then exact
+  // hits, then name — the same tiebreak chain getStageLeaderboards() already
+  // applies server-side; re-sorting here just makes the table resilient to
+  // caller ordering.
+  const wdlRate = (row: StageLeaderboardRow) =>
+    correctOutcomeRate(stageCorrectOutcomes(row, stage), stageMatchesScored(row, stage));
+
   const sortedRows = [...rows].sort((a, b) => {
     const ptsA = stagePoints(a, stage);
     const ptsB = stagePoints(b, stage);
     if (ptsB !== ptsA) return ptsB - ptsA;
+    const wdlA = wdlRate(a);
+    const wdlB = wdlRate(b);
+    if (wdlB !== wdlA) return wdlB - wdlA;
     const exA = stageExactHits(a, stage);
     const exB = stageExactHits(b, stage);
     if (exB !== exA) return exB - exA;
@@ -118,6 +125,7 @@ export default function LeaderboardTable({ stage, rows, currentParticipantId, br
       const curr = sortedRows[i];
       const tied =
         stagePoints(prev, stage) === stagePoints(curr, stage) &&
+        wdlRate(prev) === wdlRate(curr) &&
         stageExactHits(prev, stage) === stageExactHits(curr, stage);
       if (!tied) currentRank = i + 1;
     }

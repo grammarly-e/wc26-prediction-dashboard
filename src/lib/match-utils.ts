@@ -31,6 +31,17 @@ export function isKnockoutRound(round: MatchRound): boolean {
 }
 
 /**
+ * Correct-outcome (W/D/L) rate as a 0-1 fraction. This is the first
+ * tiebreaker on the stage leaderboards — ranked ahead of exact-score hits —
+ * see getStageLeaderboards() in predictions.ts and the sort/rank logic in
+ * LeaderboardTable.tsx. Participants with no scored matches in the stage
+ * get 0 rather than NaN, so they sort below anyone with a positive rate.
+ */
+export function correctOutcomeRate(correctOutcomes: number, matchesScored: number): number {
+  return matchesScored > 0 ? correctOutcomes / matchesScored : 0;
+}
+
+/**
  * Group matches by round, pre-seeding every round (even empty ones) in
  * tournament order so callers can iterate ROUND_ORDER and skip empties.
  */

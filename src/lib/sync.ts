@@ -47,6 +47,7 @@ import {
   groupLetterFromProviderGroup,
   mapStage,
   mapStatus,
+  regulationAndExtraTimeScore,
   type ProviderMatch,
 } from "./providers/football-data";
 import { scoreMatchPrediction } from "./scoring";
@@ -204,6 +205,14 @@ async function syncMatches(
     const wasFinished = dbMatch.status === "finished";
     const isNowFinished = newStatus === "finished";
 
+    // For knockout matches decided on penalties, store the 90-min+extra-time
+    // score rather than the provider's fullTime (which has the shootout
+    // goals baked in) — predictions are scored, and the result displays, as
+    // the W/D/L it actually was after 120 minutes. No-op for matches that
+    // never went to penalties (every group-stage fixture, plus any knockout
+    // match settled in regulation or extra time).
+    const finalScore = regulationAndExtraTimeScore(pm.score);
+
     // Build the update conditionally: only touch `group_letter` when the
     // provider actually reports one (group-stage fixtures). Knockout fixtures
     // come back with group === null, and we must NOT clobber the seeded
@@ -214,8 +223,8 @@ async function syncMatches(
       team1_id: team1Id,
       team2_id: team2Id,
       round: mapStage(pm.stage),
-      home_score: pm.score.fullTime.home,
-      away_score: pm.score.fullTime.away,
+      home_score: finalScore.home,
+      away_score: finalScore.away,
       status: newStatus,
     };
     if (providerGroupLetter) updatePayload.group_letter = providerGroupLetter;
@@ -234,9 +243,10 @@ async function syncMatches(
         team1_id: team1Id,
         team2_id: team2Id,
         status: "finished",
-        // Include provider scores so scoreFinishedMatch can skip a DB round-trip.
-        home_score: pm.score.fullTime.home,
-        away_score: pm.score.fullTime.away,
+        // Include the (penalty-adjusted) score so scoreFinishedMatch can
+        // skip a DB round-trip — must match what was just written above.
+        home_score: finalScore.home,
+        away_score: finalScore.away,
       });
     }
   }
@@ -480,7 +490,10 @@ async function syncTopScorers(
     return;
   }
 
-  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+  // Goals, then assists, then name — alphabetical only orders players tied
+  // on both, instead of leaving them in whatever order the source API/merge
+  // happened to produce.
+  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists || a.name.localeCompare(b.name));
 
   const { error: delErr } = await supabase
     .from("top_scorers")
@@ -1267,7 +1280,7 @@ export async function rebuildTopScorersFromEvents(): Promise<void> {
     (dbTeams as DbTeamRow[]).filter((t) => !t.is_placeholder).map((t) => [t.name.trim().toLowerCase(), t])
   );
 
-  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+  scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists || a.name.localeCompare(b.name));
 
   const { error: delErr } = await supabase
     .from("top_scorers")

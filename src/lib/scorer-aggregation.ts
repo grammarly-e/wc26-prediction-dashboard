@@ -55,5 +55,8 @@ export async function aggregateGoalsFromMatchEvents(
       goals,
     }))
     .filter((e) => e.goals > 0)
-    .sort((a, b) => b.goals - a.goals);
+    // Goals first, then name — alphabetical is purely cosmetic (it only
+    // orders players tied on goals) but keeps the list deterministic instead
+    // of depending on match_events insertion order.
+    .sort((a, b) => b.goals - a.goals || a.name.localeCompare(b.name));
 }

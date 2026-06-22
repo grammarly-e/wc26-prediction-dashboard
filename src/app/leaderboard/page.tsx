@@ -97,6 +97,16 @@ function StageLeaderCard({
 
 // \u2500\u2500 Award Accuracy Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
+// The name actually shown for a pick — a team name for team-based award
+// categories, otherwise the predicted player's name. Shared by the sort
+// comparator below and the render loop so the displayed order always matches
+// the displayed label.
+function pickDisplayName(pick: AwardPickRow, teamNames: Map<string, string>): string {
+  return pick.predicted_team_id
+    ? (teamNames.get(pick.predicted_team_id) ?? "Unknown team")
+    : (pick.predicted_player_name ?? "--");
+}
+
 function AwardAccuracyCard({
   label,
   picks,
@@ -110,11 +120,14 @@ function AwardAccuracyCard({
 }) {
   const anyScored = picks.some((p) => p.points_awarded !== null);
 
-  // Sort picks descending by goals scored; picks with no goal data sort last.
+  // Sort picks descending by goals scored (picks with no goal data sort
+  // last); ties — including ties on "no data" — break alphabetically by the
+  // picked player's (or team's) name, not the participant's.
   const sorted = [...picks].sort((a, b) => {
     const aGoals = a.predicted_player_name ? (goalsByPlayer.get(a.predicted_player_name) ?? -1) : -1;
     const bGoals = b.predicted_player_name ? (goalsByPlayer.get(b.predicted_player_name) ?? -1) : -1;
-    return bGoals - aGoals;
+    if (bGoals !== aGoals) return bGoals - aGoals;
+    return pickDisplayName(a, teamNames).localeCompare(pickDisplayName(b, teamNames));
   });
 
   return (
@@ -125,9 +138,7 @@ function AwardAccuracyCard({
       ) : (
         <ul className="flex flex-col gap-1">
           {sorted.map((pick) => {
-            const name = pick.predicted_team_id
-              ? (teamNames.get(pick.predicted_team_id) ?? "Unknown team")
-              : (pick.predicted_player_name ?? "--");
+            const name = pickDisplayName(pick, teamNames);
             const goals = pick.predicted_player_name
               ? (goalsByPlayer.get(pick.predicted_player_name) ?? null)
               : null;
@@ -334,7 +345,7 @@ export default async function LeaderboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Two independent rankings: Group Stage and Knockout Stage. Each is scored separately &mdash; 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Exact scores break ties within a stage.
+            Two independent rankings: Group Stage and Knockout Stage. Each is scored separately &mdash; 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Ties within a stage are broken by W/D/L accuracy, then exact scores. Knockout matches decided on penalties are scored on the 90-minute + extra-time result, not the shootout.
             Click a row to expand inline, or click a name to see their full prediction sheet.
           </p>
         </div>

@@ -14,7 +14,7 @@
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import { scoreMatchPrediction } from "./scoring";
-import { isKnockoutRound } from "./match-utils";
+import { correctOutcomeRate, isKnockoutRound } from "./match-utils";
 import type {
   LeaderboardRow,
   Match,
@@ -218,16 +218,24 @@ export async function getStageLeaderboards(): Promise<{
   }
 
   const all = Array.from(totals.values());
+  // Tiebreak order: points, then W/D/L correct-outcome rate, then exact-score
+  // hits, then name. W/D/L rate ranks above exact hits because consistently
+  // calling the right result is a stronger signal than a handful of perfect
+  // scorelines once total points are tied.
   return {
     groupStage: [...all].sort(
       (a, b) =>
         b.group_stage_points - a.group_stage_points ||
+        correctOutcomeRate(b.group_stage_correct_outcomes, b.group_stage_matches_scored) -
+          correctOutcomeRate(a.group_stage_correct_outcomes, a.group_stage_matches_scored) ||
         b.group_stage_exact_hits - a.group_stage_exact_hits ||
         a.display_name.localeCompare(b.display_name)
     ),
     knockout: [...all].sort(
       (a, b) =>
         b.knockout_points - a.knockout_points ||
+        correctOutcomeRate(b.knockout_correct_outcomes, b.knockout_matches_scored) -
+          correctOutcomeRate(a.knockout_correct_outcomes, a.knockout_matches_scored) ||
         b.knockout_exact_hits - a.knockout_exact_hits ||
         a.display_name.localeCompare(b.display_name)
     ),
