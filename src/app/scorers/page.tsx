@@ -1,4 +1,5 @@
 import { getTopScorers } from "@/lib/data";
+import { RANK_MEDALS } from "@/lib/match-utils";
 
 export const revalidate = 0;
 
@@ -43,7 +44,11 @@ export default async function ScorersPage() {
                   }`}
                 >
                   <td className="px-3 py-2 tabular-nums text-neutral-400">
-                    {s.rank === 1 ? "🥇" : s.rank === 2 ? "🥈" : s.rank === 3 ? "🥉" : (s.rank ?? "—")}
+                    {s.rank && RANK_MEDALS[s.rank] ? (
+                      <span className="text-xl leading-none">{RANK_MEDALS[s.rank]}</span>
+                    ) : (
+                      s.rank ?? "—"
+                    )}
                   </td>
                   <td className="px-3 py-2 font-medium">{s.player_name}</td>
                   <td className="px-3 py-2 text-neutral-500">{s.team_name ?? "—"}</td>

@@ -7,7 +7,7 @@ import {
   getParticipantMatchPredictions,
   getLeaderboard,
 } from "@/lib/predictions";
-import { ROUND_ORDER, groupByRound, sortMatchesForDisplay } from "@/lib/match-utils";
+import { ROUND_ORDER, groupByRound, sortMatchesForDisplay, RANK_MEDALS } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
@@ -40,8 +40,6 @@ const TIER_LABEL: Record<PickTier, string> = {
   wrong:       "Missed this one (0 pts)",
   pending:     "Not yet played",
 };
-
-const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -98,8 +96,9 @@ export default async function ParticipantPage({
         <div>
           <h1 className="text-2xl font-bold">{participant.display_name}</h1>
           {rank && (
-            <p className="mt-0.5 text-sm text-neutral-500">
-              {MEDALS[rank] ?? `#${rank}`} · {totalPoints} pts
+            <p className="mt-0.5 flex items-center gap-1 text-sm text-neutral-500">
+              {RANK_MEDALS[rank] ? <span className="text-xl leading-none">{RANK_MEDALS[rank]}</span> : `#${rank}`}
+              <span>· {totalPoints} pts</span>
             </p>
           )}
         </div>

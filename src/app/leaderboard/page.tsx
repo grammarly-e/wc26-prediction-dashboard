@@ -11,11 +11,10 @@ import {
   type AwardPickRow,
 } from "@/lib/predictions";
 import LeaderboardTable from "@/components/LeaderboardTable";
+import { RANK_MEDALS } from "@/lib/match-utils";
 import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
-
-const MEDALS: Record<number, string> = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "no data synced yet";
@@ -217,7 +216,11 @@ function FavouritesLeaderboard({
             {ranked.map((row, idx) => (
               <tr key={row.participant_id} className="border-b border-neutral-100 last:border-0">
                 <td className="px-4 py-3 font-mono text-neutral-500">
-                  {MEDALS[idx + 1] ?? `#${idx + 1}`}
+                  {RANK_MEDALS[idx + 1] ? (
+                    <span className="text-xl leading-none">{RANK_MEDALS[idx + 1]}</span>
+                  ) : (
+                    `#${idx + 1}`
+                  )}
                 </td>
                 <td className="px-4 py-3 font-medium">{row.display_name}</td>
                 <td className="px-4 py-3">
@@ -387,7 +390,7 @@ export default async function LeaderboardPage() {
             <div>
               <p className="text-xs uppercase tracking-wide text-gold/70">Group stage</p>
               <p className="text-lg font-bold tabular-nums">
-                {MEDALS[myGroupIndex + 1] ?? `#${myGroupIndex + 1}`} &middot; {myGroupRow.group_stage_points} pts
+                {RANK_MEDALS[myGroupIndex + 1] ?? `#${myGroupIndex + 1}`} &middot; {myGroupRow.group_stage_points} pts
               </p>
             </div>
           )}
@@ -395,7 +398,7 @@ export default async function LeaderboardPage() {
             <div>
               <p className="text-xs uppercase tracking-wide text-gold/70">Knockout stage</p>
               <p className="text-lg font-bold tabular-nums">
-                {MEDALS[myKnockoutIndex + 1] ?? `#${myKnockoutIndex + 1}`} &middot; {myKnockoutRow.knockout_points} pts
+                {RANK_MEDALS[myKnockoutIndex + 1] ?? `#${myKnockoutIndex + 1}`} &middot; {myKnockoutRow.knockout_points} pts
               </p>
             </div>
           )}

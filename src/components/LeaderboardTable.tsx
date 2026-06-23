@@ -4,11 +4,9 @@ import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
-import { correctOutcomeRate, isKnockoutRound } from "@/lib/match-utils";
+import { correctOutcomeRate, isKnockoutRound, RANK_MEDALS } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 import type { StageLeaderboardRow } from "@/lib/predictions";
-
-const MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 type Stage = "group" | "knockout";
 
@@ -37,12 +35,21 @@ function tierBadgeClass(points: number): string {
   return "bg-red-100 text-red-500";
 }
 
-/** Returns the length of the participant's current hot streak (consecutive scored matches with ≥1 pt). */
+/**
+ * Returns the length of the participant's current hot streak (consecutive
+ * scored matches with ≥1 pt), walking backward from the most recently played
+ * match. "Most recent" is determined by actual kickoff time (kickoff_at) —
+ * not match_number, which is assigned at schedule creation and can drift out
+ * of chronological order once matches get postponed/rescheduled.
+ */
 function getHotStreak(picks: MatchPrediction[], matches: Map<string, Match>): number {
   const scored = picks
     .filter((p) => p.points_awarded !== null)
-    .map((p) => ({ pts: p.points_awarded ?? 0, num: matches.get(p.match_id)?.match_number ?? 0 }))
-    .sort((a, b) => b.num - a.num);
+    .map((p) => {
+      const kickoffAt = matches.get(p.match_id)?.kickoff_at;
+      return { pts: p.points_awarded ?? 0, kickoffMs: kickoffAt ? new Date(kickoffAt).getTime() : 0 };
+    })
+    .sort((a, b) => b.kickoffMs - a.kickoffMs);
   let streak = 0;
   for (const { pts } of scored) {
     if (pts > 0) streak++;
@@ -171,8 +178,8 @@ export default function LeaderboardTable({ stage, rows, currentParticipantId, br
             >
               Points
             </th>
-            <th className="px-4 py-3 text-right font-semibold" title="Exact scoreline predictions (5 pts each)">Exact</th>
             <th className="px-4 py-3 text-right font-semibold" title="Correct W/D/L outcome predictions out of all finished matches in this stage">W/D/L %</th>
+            <th className="px-4 py-3 text-right font-semibold" title="Exact scoreline predictions (5 pts each)">Exact</th>
           </tr>
         </thead>
         <tbody>
@@ -200,19 +207,23 @@ export default function LeaderboardTable({ stage, rows, currentParticipantId, br
                 >
                   <td className="px-4 py-3 font-mono text-neutral-500">
                     <span className="inline-flex items-center gap-1.5">
-                      {MEDALS[displayRank[row.participant_id]] ?? displayRank[row.participant_id]}
+                      {RANK_MEDALS[displayRank[row.participant_id]] ? (
+                        <span className="text-xl leading-none">{RANK_MEDALS[displayRank[row.participant_id]]}</span>
+                      ) : (
+                        displayRank[row.participant_id]
+                      )}
                       {(() => {
                         const prev = prevRanks[row.participant_id];
                         const curRank = displayRank[row.participant_id];
                         if (prev === undefined) {
                           return Object.keys(prevRanks).length > 0 ? (
-                            <span className="text-[10px] font-semibold text-sky-500">NEW</span>
+                            <span className="text-xs font-bold text-sky-500">NEW</span>
                           ) : null;
                         }
                         const delta = prev - curRank;
                         if (delta === 0) return null;
                         return (
-                          <span className={`text-[10px] font-semibold ${delta > 0 ? "text-emerald-500" : "text-red-400"}`}>
+                          <span className={`text-xs font-bold ${delta > 0 ? "text-emerald-500" : "text-red-400"}`}>
                             {delta > 0 ? `↑${delta}` : `↓${Math.abs(delta)}`}
                           </span>
                         );
@@ -245,10 +256,10 @@ export default function LeaderboardTable({ stage, rows, currentParticipantId, br
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-bold tabular-nums">{stagePoints(row, stage)}</td>
-                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{stageExactHits(row, stage)}</td>
                   <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">
                     {wdlPct !== null ? `${wdlPct}%` : <span className="text-neutral-300">--</span>}
                   </td>
+                  <td className="px-4 py-3 text-right font-mono tabular-nums text-neutral-600">{stageExactHits(row, stage)}</td>
                 </tr>
                 {isOpen && (
                   <tr className="border-b border-neutral-100 last:border-0">

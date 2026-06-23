@@ -10,6 +10,14 @@
 
 import type { Match, MatchRound } from "./types";
 
+/**
+ * Top-3 rank → medal emoji, shared by every page that renders a ranked list
+ * (leaderboard table, favourites leaderboard, participant page, scorers
+ * page). Was previously redefined independently in four places — keep all
+ * four in sync by editing only this constant.
+ */
+export const RANK_MEDALS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
 export const ROUND_ORDER: MatchRound[] = [
   "Group Stage",
   "Round of 32",
