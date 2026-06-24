@@ -16,6 +16,8 @@
 // everything downstream consumes the normalized shapes below.
 // ============================================================================
 
+import type { MatchRound } from "../types";
+
 const BASE_URL = "https://api.football-data.org/v4";
 const COMPETITION_CODE = "WC"; // FIFA World Cup
 
@@ -165,7 +167,7 @@ export function mapStatus(status: ProviderMatch["status"]): "scheduled" | "live"
   }
 }
 
-export function mapStage(stage: string): string {
+export function mapStage(stage: string): MatchRound {
   switch (stage) {
     case "GROUP_STAGE":
       return "Group Stage";
@@ -182,7 +184,10 @@ export function mapStage(stage: string): string {
     case "FINAL":
       return "Final";
     default:
-      return stage;
+      // Unrecognized provider stage code — default to Group Stage rather
+      // than passing the raw string through, since callers now require a
+      // genuine MatchRound (e.g. isKnockoutRound() in sync.ts).
+      return "Group Stage";
   }
 }
 

@@ -25,12 +25,13 @@
 //   3. Write score + status + external_id onto the match.
 //   4. When a match transitions into "finished" for the first time, score
 //      every submitted prediction for it via scoreMatchPrediction().
-//   5. Refresh `standings` (group tables) and `top_scorers` (best effort —
-//      see the caveat in src/lib/providers/football-data.ts).
+//   5. Recompute `standings` (group tables) from our own `matches` rows (no
+//      external call), and refresh `top_scorers` (best effort — see the
+//      caveat in src/lib/providers/football-data.ts).
 //
 // Respects football-data.org's free-tier rate limit (10 req/min): a full run
-// makes at most 9 provider calls (3 base: matches + standings + scorers, plus
-// up to MAX_EVENT_FETCHES=6 goal-detail calls). Any newly-finished matches that
+// makes at most 8 provider calls (2 base: matches + scorers, plus up to
+// MAX_EVENT_FETCHES=6 goal-detail calls). Any newly-finished matches that
 // exceed the cap are deferred to the next run via backfillMissingMatchEvents().
 // In production this runs every hour via GitHub Actions (.github/workflows/sync.yml),
 // once daily via Vercel Cron as a backstop (vercel.json), and on-demand via
@@ -43,16 +44,17 @@ import {
   fetchMatchDetail,
   fetchMatches,
   fetchScorers,
-  fetchStandings,
   groupLetterFromProviderGroup,
   mapStage,
   mapStatus,
   regulationAndExtraTimeScore,
   type ProviderMatch,
 } from "./providers/football-data";
-import { scoreMatchPrediction } from "./scoring";
+import { scoreMatchPrediction, winnerSideFromProvider } from "./scoring";
+import { isKnockoutRound } from "./match-utils";
 import { aggregateGoalsFromMatchEvents } from "./scorer-aggregation";
-import type { Database } from "./types";
+import { recomputeStandingsAndBracket } from "./admin-recompute";
+import type { Database, MatchRound, WinnerSide } from "./types";
 
 // ----------------------------------------------------------------------------
 // Client setup (lazy — see note above on why this lives inside a function)
@@ -86,6 +88,9 @@ interface DbMatchRow {
   away_score: number | null;
   status: string;
   external_id: string | null;
+  /** Only present on rows pushed onto newlyFinished — see syncMatches(). */
+  round?: MatchRound;
+  winner_side?: WinnerSide | null;
 }
 
 interface DbTeamRow {
@@ -212,6 +217,15 @@ async function syncMatches(
     // never went to penalties (every group-stage fixture, plus any knockout
     // match settled in regulation or extra time).
     const finalScore = regulationAndExtraTimeScore(pm.score);
+    const matchRound = mapStage(pm.stage);
+
+    // Actual winner, including penalty-shootout outcomes — null for a
+    // group-stage draw. Populated for every match (not just knockout) since
+    // it's free off the provider payload and also feeds the bracket-slot
+    // resolver in admin-recompute.ts, which needs the true winner of matches
+    // decided on penalties (home_score/away_score alone can't tell, since
+    // those columns hold the 90min+ET score — see regulationAndExtraTimeScore()).
+    const winnerSide = winnerSideFromProvider(pm.score.winner);
 
     // Build the update conditionally: only touch `group_letter` when the
     // provider actually reports one (group-stage fixtures). Knockout fixtures
@@ -222,9 +236,10 @@ async function syncMatches(
       external_id: String(pm.id),
       team1_id: team1Id,
       team2_id: team2Id,
-      round: mapStage(pm.stage),
+      round: matchRound,
       home_score: finalScore.home,
       away_score: finalScore.away,
+      winner_side: winnerSide,
       status: newStatus,
     };
     if (providerGroupLetter) updatePayload.group_letter = providerGroupLetter;
@@ -243,10 +258,13 @@ async function syncMatches(
         team1_id: team1Id,
         team2_id: team2Id,
         status: "finished",
-        // Include the (penalty-adjusted) score so scoreFinishedMatch can
-        // skip a DB round-trip — must match what was just written above.
+        // Include the (penalty-adjusted) score + round/winner so
+        // scoreFinishedMatch can skip a DB round-trip — must match what was
+        // just written above.
         home_score: finalScore.home,
         away_score: finalScore.away,
+        round: matchRound,
+        winner_side: winnerSide,
       });
     }
   }
@@ -267,7 +285,7 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
 
   const { data: predictions, error: predErr } = await supabase
     .from("match_predictions")
-    .select("id, predicted_home, predicted_away")
+    .select("id, predicted_home, predicted_away, predicted_winner_side")
     .eq("match_id", match.id);
   if (predErr) {
     console.error(`  ✗ Loading predictions for match #${match.match_number}: ${predErr.message}`);
@@ -283,17 +301,23 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
   // null-check TypeScript already saw at the top of this function.
   const actualHome = match.home_score;
   const actualAway = match.away_score;
+  // round/winner_side are always set on rows passed in here — see syncMatches().
+  const isKnockout = isKnockoutRound(match.round as MatchRound);
+  const actualWinnerSide = match.winner_side ?? null;
 
   // Batched instead of a sequential for-await loop: all predictions for this
   // match are independent writes, so firing them concurrently cuts the time
   // to score a match from O(predictions) round-trips to O(1).
   await Promise.all(
-    predictions.map(async (p) => {
+    predictions.map(async (p: { id: string; predicted_home: number; predicted_away: number; predicted_winner_side: WinnerSide | null }) => {
       const { points, breakdown } = scoreMatchPrediction({
         predictedHome: p.predicted_home,
         predictedAway: p.predicted_away,
         actualHome,
         actualAway,
+        isKnockout,
+        predictedWinnerSide: p.predicted_winner_side,
+        actualWinnerSide,
       });
 
       const { error: scoreErr } = await supabase
@@ -308,63 +332,16 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
 
 // ----------------------------------------------------------------------------
 // Step 5a: standings
+//
+// Standings are NOT fetched from the provider. They're derived entirely from
+// our own `matches` table (recomputeStandingsAndBracket → computeStandings in
+// admin-recompute.ts — the same function the admin "Recompute" button and the
+// update-match route use), so the table is always consistent with whatever
+// results we actually have, with no extra API call and no dependency on the
+// provider's standings endpoint being available (it's often not, early in the
+// group stage). This also resolves knockout bracket slot codes (1A/2A/3rd-
+// place) as a side effect, so the bracket fills in automatically too.
 // ----------------------------------------------------------------------------
-
-async function syncStandings(
-  supabase: SupabaseClient<Database>,
-  teamsByName: Map<string, DbTeamRow>,
-) {
-  console.log("Fetching standings …");
-  let groups;
-  try {
-    groups = await fetchStandings();
-  } catch (err) {
-    console.error(`  ! Standings fetch failed (often unavailable before the group stage starts): ${(err as Error).message}`);
-    return;
-  }
-
-  let written = 0;
-  for (const group of groups) {
-    const groupLetter = groupLetterFromProviderGroup(group.group);
-    if (!groupLetter) continue; // skip overall/knockout tables — we only track group standings
-
-    for (const row of group.table) {
-      let team = teamsByName.get(row.team.name.trim().toLowerCase());
-      if (!team) {
-        for (const t of teamsByName.values()) {
-          if (namesLikelyMatch(t.name, row.team.name)) {
-            team = t;
-            break;
-          }
-        }
-      }
-      if (!team) {
-        console.warn(`  ! Standings: no DB team match for "${row.team.name}" (Group ${groupLetter}) — skipping row`);
-        continue;
-      }
-
-      const { error } = await supabase.from("standings").upsert(
-        {
-          group_letter: groupLetter,
-          team_id: team.id,
-          played: row.playedGames,
-          won: row.won,
-          drawn: row.draw,
-          lost: row.lost,
-          goals_for: row.goalsFor,
-          goals_against: row.goalsAgainst,
-          points: row.points,
-          rank: row.position,
-        },
-        { onConflict: "group_letter,team_id" }
-      );
-
-      if (error) console.error(`  ✗ Standing for ${row.team.name}: ${error.message}`);
-      else written++;
-    }
-  }
-  console.log(`Standings: ${written} rows upserted.`);
-}
 
 // ----------------------------------------------------------------------------
 // Step 5b: top scorers (best effort — see provider caveat)
@@ -1093,7 +1070,7 @@ async function rescoreUnscoredMatches(
   // Of those, only score the ones that are actually finished with known scores.
   const { data: finishedMatches, error: matchErr } = await supabase
     .from("matches")
-    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, external_id, status")
+    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, external_id, status, round, winner_side")
     .eq("status", "finished")
     .not("home_score", "is", null)
     .not("away_score", "is", null)
@@ -1132,7 +1109,7 @@ async function recoverStaleLiveMatches(
 
   const { data, error } = await supabase
     .from("matches")
-    .select("id, match_number, team1_code, team2_code, team1_id, team2_id, external_id, status, kickoff_at, home_score, away_score")
+    .select("id, match_number, team1_code, team2_code, team1_id, team2_id, external_id, status, kickoff_at, home_score, away_score, round, winner_side")
     .eq("status", "live")
     .lt("kickoff_at", cutoff);
 
@@ -1178,9 +1155,10 @@ async function recoverStaleLiveMatches(
 // Main entry point
 // ----------------------------------------------------------------------------
 
-// Football-data.org free tier: 10 req/min. A full run uses 3 base calls
-// (fetchMatches, fetchStandings, fetchScorers) + up to MAX_EVENT_FETCHES
-// goal-detail calls. Total: 3 + 6 = 9, safely under the limit.
+// Football-data.org free tier: 10 req/min. A full run uses 2 base calls
+// (fetchMatches, fetchScorers) + up to MAX_EVENT_FETCHES goal-detail calls.
+// Total: 2 + 6 = 8, safely under the limit. (Standings are computed locally
+// from our own `matches` table — no provider call.)
 const MAX_EVENT_FETCHES = 6;
 
 export async function runSync(): Promise<{ ok: boolean; message: string; finishedScored: number }> {
@@ -1189,7 +1167,7 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
   try {
     // Fetch the teams table once and share it across all sync steps.
     // syncMatches may add new resolved teams to this map (placeholder slots);
-    // syncStandings and syncTopScorers consume the updated map without querying again.
+    // recomputeStandingsAndBracket and syncTopScorers consume the updated map without querying again.
     const { data: dbTeams, error: teamsErr } = await supabase
       .from("teams").select("id, name, is_placeholder");
     if (teamsErr) throw teamsErr;
@@ -1230,7 +1208,15 @@ export async function runSync(): Promise<{ ok: boolean; message: string; finishe
     // unscored (transition was missed by a previous run due to API lag or error).
     const catchUpCount = await rescoreUnscoredMatches(supabase, newlyFinishedIds);
 
-    await syncStandings(supabase, teamsByName);
+    // Best-effort, like the old provider-backed call it replaced: a recompute
+    // failure shouldn't take down the rest of the sync run (events/scorers
+    // below still need to happen).
+    try {
+      await recomputeStandingsAndBracket(supabase);
+    } catch (err) {
+      console.error(`  ! Standings/bracket recompute failed: ${(err as Error).message}`);
+    }
+
     await syncTopScorers(supabase, teamsByName);
 
     // Backfill any finished matches that still lack goal data, using whatever

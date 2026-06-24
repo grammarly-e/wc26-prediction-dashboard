@@ -4,7 +4,8 @@ import { adminTokenHash } from "@/lib/admin-auth";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { scoreMatchPrediction } from "@/lib/scoring";
 import { recomputeStandingsAndBracket } from "@/lib/admin-recompute";
-import type { MatchStatus } from "@/lib/types";
+import { isKnockoutRound } from "@/lib/match-utils";
+import type { MatchRound, MatchStatus, WinnerSide } from "@/lib/types";
 
 function isAuthenticated(): boolean {
   if (!process.env.ADMIN_PASSWORD) return false;
@@ -21,9 +22,12 @@ export async function POST(request: Request) {
     homeScore: number | null;
     awayScore: number | null;
     status: MatchStatus;
+    round: MatchRound;
+    winnerSide: WinnerSide | null;
   };
 
   const supabase = createServiceRoleClient();
+  const isKnockout = isKnockoutRound(body.round);
 
   // 1. Update the match record.
   const { error } = await supabase
@@ -32,6 +36,7 @@ export async function POST(request: Request) {
       home_score: body.homeScore,
       away_score: body.awayScore,
       status: body.status,
+      winner_side: body.winnerSide,
       updated_at: new Date().toISOString(),
     })
     .eq("id", body.matchId);
@@ -45,21 +50,25 @@ export async function POST(request: Request) {
   if (body.homeScore != null && body.awayScore != null) {
     const { data: predictions, error: predErr } = await supabase
       .from("match_predictions")
-      .select("id, predicted_home, predicted_away")
+      .select("id, predicted_home, predicted_away, predicted_winner_side")
       .eq("match_id", body.matchId);
 
     if (!predErr && predictions && predictions.length > 0) {
       const actualHome = body.homeScore;
       const actualAway = body.awayScore;
+      const actualWinnerSide = body.winnerSide;
       // Batched: independent per-prediction writes, no need to serialize.
       await Promise.all(
-        (predictions as { id: string; predicted_home: number; predicted_away: number }[]).map(
+        (predictions as { id: string; predicted_home: number; predicted_away: number; predicted_winner_side: WinnerSide | null }[]).map(
           async (p) => {
             const { points, breakdown } = scoreMatchPrediction({
               predictedHome: p.predicted_home,
               predictedAway: p.predicted_away,
               actualHome,
               actualAway,
+              isKnockout,
+              predictedWinnerSide: p.predicted_winner_side,
+              actualWinnerSide,
             });
             await supabase
               .from("match_predictions")

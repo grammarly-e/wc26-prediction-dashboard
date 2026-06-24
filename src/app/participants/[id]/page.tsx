@@ -7,7 +7,7 @@ import {
   getParticipantMatchPredictions,
   getLeaderboard,
 } from "@/lib/predictions";
-import { ROUND_ORDER, groupByRound, sortMatchesForDisplay, RANK_MEDALS } from "@/lib/match-utils";
+import { ROUND_ORDER, groupByRound, sortMatchesForDisplay, RANK_MEDALS, isKnockoutRound } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
@@ -40,6 +40,14 @@ const TIER_LABEL: Record<PickTier, string> = {
   wrong:       "Missed this one (0 pts)",
   pending:     "Not yet played",
 };
+
+// Knockout matches can't end in a draw, so the 2pt tier means "called the
+// winner" rather than "called W/D/L" — swap in accurate copy for the title
+// tooltip on those cards.
+function tierLabel(tier: PickTier, isKnockout: boolean): string {
+  if (tier === "outcome" && isKnockout) return "Called it — picked the winner (2 pts)";
+  return TIER_LABEL[tier];
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -160,7 +168,7 @@ export default async function ParticipantPage({
                     <div
                       key={match.id}
                       className={`rounded-xl border px-3 py-2.5 text-xs shadow-sm ${pick ? TIER_CLASS[tier] : "border-neutral-100 bg-neutral-50 opacity-60"}`}
-                      title={pick ? TIER_LABEL[tier] : "No prediction submitted"}
+                      title={pick ? tierLabel(tier, isKnockoutRound(match.round)) : "No prediction submitted"}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2 text-neutral-400">
                         <span>#{match.match_number}</span>
@@ -177,6 +185,11 @@ export default async function ParticipantPage({
                             <>
                               <span className="font-mono font-semibold tabular-nums text-neutral-900">
                                 {pick.predicted_home}–{pick.predicted_away}
+                                {isKnockoutRound(match.round) && pick.predicted_winner_side && (
+                                  <span className="ml-1 font-sans text-[10px] font-normal text-neutral-400">
+                                    ({pick.predicted_winner_side === "team1" ? match.team1_code : match.team2_code} W)
+                                  </span>
+                                )}
                               </span>
                               {hasResult && (
                                 <span className="text-neutral-400">

@@ -16,8 +16,23 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
+import { isKnockoutRound } from "@/lib/match-utils";
 import StatusBadge from "./StatusBadge";
-import type { Match, MatchPrediction } from "@/lib/types";
+import type { Match, MatchPrediction, WinnerSide } from "@/lib/types";
+
+/** Auto-default for the winner toggle: whichever side is ahead on the
+ *  entered scoreline. Returns null on a tie or incomplete entry, since
+ *  knockout matches can't end level, so a tied 90+ET scoreline (settled on
+ *  penalties) always needs an explicit manual pick. */
+function leadingSide(homeStr: string, awayStr: string): WinnerSide | null {
+  if (homeStr === "" || awayStr === "") return null;
+  const home = Number(homeStr);
+  const away = Number(awayStr);
+  if (!Number.isInteger(home) || !Number.isInteger(away)) return null;
+  if (home > away) return "team1";
+  if (away > home) return "team2";
+  return null;
+}
 
 function formatKickoff(iso: string): string {
   return new Date(iso).toLocaleString("en-SG", {
@@ -78,6 +93,12 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
 
   const [home, setHome] = useState(existing ? String(existing.predicted_home) : "");
   const [away, setAway] = useState(existing ? String(existing.predicted_away) : "");
+  const isKnockout = isKnockoutRound(match.round);
+  const [winnerSide, setWinnerSide] = useState<WinnerSide | null>(existing?.predicted_winner_side ?? null);
+  // Once the participant manually picks a winner, stop auto-defaulting it
+  // from the scoreline inputs. See leadingSide() above and the onChange
+  // handlers below.
+  const [winnerSideTouched, setWinnerSideTouched] = useState(existing?.predicted_winner_side != null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -91,6 +112,19 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
       setStatus("error");
       return;
     }
+    if (isKnockout && !winnerSide) {
+      setError("Pick who wins. A draw isn't a valid final outcome for a knockout match.");
+      setStatus("error");
+      return;
+    }
+    if (isKnockout && winnerSide) {
+      const decisive = leadingSide(home, away);
+      if (decisive && decisive !== winnerSide) {
+        setError("Your winner pick doesn't match the scoreline you entered. Update one so they agree.");
+        setStatus("error");
+        return;
+      }
+    }
 
     setStatus("saving");
     setError(null);
@@ -98,7 +132,13 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
     const { error: upsertError } = await supabase
       .from("match_predictions")
       .upsert(
-        { participant_id: participantId, match_id: match.id, predicted_home: h, predicted_away: a },
+        {
+          participant_id: participantId,
+          match_id: match.id,
+          predicted_home: h,
+          predicted_away: a,
+          predicted_winner_side: isKnockout ? winnerSide : null,
+        },
         { onConflict: "participant_id,match_id" }
       );
 
@@ -146,43 +186,89 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
       {locked ? (
         <LockedSummary match={match} existing={existing} />
       ) : (
-        <form onSubmit={handleSave} className="flex items-center gap-2">
-          <input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={99}
-            value={home}
-            onChange={(e) => {
-              setHome(e.target.value);
-              setStatus("idle");
-            }}
-            placeholder="–"
-            aria-label={`Predicted score for ${team1}`}
-            className="w-14 rounded-lg border border-neutral-300 px-2 py-1.5 text-center font-mono text-sm focus:border-pitch focus:outline-none"
-          />
-          <span className="text-neutral-400">–</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={99}
-            value={away}
-            onChange={(e) => {
-              setAway(e.target.value);
-              setStatus("idle");
-            }}
-            placeholder="–"
-            aria-label={`Predicted score for ${team2}`}
-            className="w-14 rounded-lg border border-neutral-300 px-2 py-1.5 text-center font-mono text-sm focus:border-pitch focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={status === "saving" || home === "" || away === ""}
-            className="ml-auto rounded-lg bg-pitch px-3 py-1.5 text-xs font-semibold text-gold transition hover:opacity-90 disabled:opacity-50"
-          >
-            {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : existing ? "Update" : "Save"}
-          </button>
+        <form onSubmit={handleSave} className="flex flex-col gap-2">
+          {isKnockout && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-neutral-500">Winner:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setWinnerSide("team1");
+                  setWinnerSideTouched(true);
+                  setStatus("idle");
+                }}
+                className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+                  winnerSide === "team1"
+                    ? "bg-pitch text-gold"
+                    : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+                }`}
+              >
+                {flag1 && <span aria-hidden="true">{flag1} </span>}
+                {team1}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWinnerSide("team2");
+                  setWinnerSideTouched(true);
+                  setStatus("idle");
+                }}
+                className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+                  winnerSide === "team2"
+                    ? "bg-pitch text-gold"
+                    : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+                }`}
+              >
+                {flag2 && <span aria-hidden="true">{flag2} </span>}
+                {team2}
+              </button>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={99}
+              value={home}
+              onChange={(e) => {
+                const v = e.target.value;
+                setHome(v);
+                setStatus("idle");
+                if (isKnockout && !winnerSideTouched) setWinnerSide(leadingSide(v, away));
+              }}
+              placeholder="–"
+              aria-label={`Predicted score for ${team1}`}
+              className="w-14 rounded-lg border border-neutral-300 px-2 py-1.5 text-center font-mono text-sm focus:border-pitch focus:outline-none"
+            />
+            <span className="text-neutral-400">–</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={99}
+              value={away}
+              onChange={(e) => {
+                const v = e.target.value;
+                setAway(v);
+                setStatus("idle");
+                if (isKnockout && !winnerSideTouched) setWinnerSide(leadingSide(home, v));
+              }}
+              placeholder="–"
+              aria-label={`Predicted score for ${team2}`}
+              className="w-14 rounded-lg border border-neutral-300 px-2 py-1.5 text-center font-mono text-sm focus:border-pitch focus:outline-none"
+            />
+            {isKnockout && (
+              <span className="text-[11px] text-neutral-400">90 min + ET (no penalties)</span>
+            )}
+            <button
+              type="submit"
+              disabled={status === "saving" || home === "" || away === ""}
+              className="ml-auto rounded-lg bg-pitch px-3 py-1.5 text-xs font-semibold text-gold transition hover:opacity-90 disabled:opacity-50"
+            >
+              {status === "saving" ? "Saving…" : status === "saved" ? "Saved ✓" : existing ? "Update" : "Save"}
+            </button>
+          </div>
         </form>
       )}
       {error && <p className="text-xs text-red-600">{error}</p>}
@@ -217,6 +303,12 @@ function LockedSummary({ match, existing }: { match: Match; existing: MatchPredi
     );
   }
 
+  const winnerCode = existing.predicted_winner_side === "team1"
+    ? match.team1_code
+    : existing.predicted_winner_side === "team2"
+    ? match.team2_code
+    : null;
+
   return (
     <div className="flex items-center justify-between rounded-lg bg-neutral-50 px-3 py-2 text-xs">
       <span className="text-neutral-600">
@@ -224,6 +316,7 @@ function LockedSummary({ match, existing }: { match: Match; existing: MatchPredi
         <span className="font-mono font-semibold text-neutral-900">
           {existing.predicted_home}–{existing.predicted_away}
         </span>
+        {winnerCode && isKnockoutRound(match.round) && <> ({winnerCode} to win)</>}
         {" "}· Final: {finalScore}
       </span>
       {existing.points_awarded !== null && (

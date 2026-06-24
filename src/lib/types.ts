@@ -21,6 +21,15 @@ export type EventType =
   | "red_card"
   | "substitution";
 export type CategoryTargetType = "team" | "player";
+/**
+ * Positional winner reference (team1/team2 slot, not a team UUID) — mirrors
+ * predicted_home/predicted_away, which are also slot-positional so a pick
+ * survives before a knockout bracket slot resolves to an actual team.
+ * Used for matches.winner_side (actual result) and
+ * match_predictions.predicted_winner_side (the participant's pick). See
+ * supabase/migrations/0012_knockout_winner_predictions.sql.
+ */
+export type WinnerSide = "team1" | "team2";
 
 export interface Team {
   id: string;
@@ -52,6 +61,8 @@ export interface Match {
   status: MatchStatus;
   external_id: string | null;
   updated_at: string;
+  /** Actual winner, including penalty-shootout outcomes. Null for a group-stage draw. */
+  winner_side: WinnerSide | null;
 }
 
 export interface Player {
@@ -142,6 +153,8 @@ export interface MatchPrediction {
   updated_at: string;
   points_awarded: number | null;
   score_breakdown: ScoreBreakdown | null;
+  /** Explicit winner pick for knockout matches — null/unused for group stage. */
+  predicted_winner_side: WinnerSide | null;
 }
 
 export interface TournamentPrediction {

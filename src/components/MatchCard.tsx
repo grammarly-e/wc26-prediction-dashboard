@@ -1,5 +1,6 @@
 import StatusBadge from "./StatusBadge";
 import { flagForTeam } from "@/lib/flags";
+import { isKnockoutRound } from "@/lib/match-utils";
 import type { Match, MatchEvent } from "@/lib/types";
 import type { ConsensusData } from "@/lib/data";
 import type { MatchInsight, MatchPredictionReveal } from "@/lib/predictions";
@@ -229,6 +230,11 @@ export default function MatchCard({
                   }`}
                 >
                   {p.predicted_home}-{p.predicted_away}
+                  {isKnockoutRound(match.round) && p.predicted_winner_side && (
+                    <span className="ml-1 text-[10px] font-normal text-neutral-400">
+                      ({p.predicted_winner_side === "team1" ? match.team1_code : match.team2_code} W)
+                    </span>
+                  )}
                   {p.exact_score && <span className="ml-1">{"🎯"}</span>}
                   {!p.exact_score && p.correct_outcome && <span className="ml-1 text-blue-400">{"✓"}</span>}
                 </span>

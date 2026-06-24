@@ -375,6 +375,11 @@ function PredictionBreakdown({
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     <span className="font-mono font-semibold tabular-nums text-neutral-900">
                       {pick.predicted_home}--{pick.predicted_away}
+                      {isKnockoutRound(match.round) && pick.predicted_winner_side && (
+                        <span className="ml-1 font-sans text-[10px] font-normal text-neutral-400">
+                          ({pick.predicted_winner_side === "team1" ? match.team1_code : match.team2_code} W)
+                        </span>
+                      )}
                       {hasResult && (
                         <span className="ml-1.5 text-neutral-400">
                           (final {match.home_score}--{match.away_score})

@@ -23,6 +23,7 @@ import type {
   PredictionCategory,
   ScoreBreakdown,
   TournamentPrediction,
+  WinnerSide,
 } from "./types";
 
 export async function getCurrentParticipant(): Promise<Participant | null> {
@@ -115,12 +116,20 @@ async function enrichMatchPredictions(
   const matchIds = [...new Set(predictions.map((p) => p.match_id))];
   const { data: matchRows } = await supabase
     .from("matches")
-    .select("id, home_score, away_score")
+    .select("id, round, home_score, away_score, winner_side")
     .eq("status", "finished")
     .in("id", matchIds);
 
   const finishedById = new Map(
-    ((matchRows ?? []) as Array<{ id: string; home_score: number | null; away_score: number | null }>)
+    (
+      (matchRows ?? []) as Array<{
+        id: string;
+        round: Match["round"];
+        home_score: number | null;
+        away_score: number | null;
+        winner_side: WinnerSide | null;
+      }>
+    )
       .filter((m) => m.home_score !== null && m.away_score !== null)
       .map((m) => [m.id, m])
   );
@@ -133,6 +142,9 @@ async function enrichMatchPredictions(
       predictedAway: p.predicted_away,
       actualHome: m.home_score!,
       actualAway: m.away_score!,
+      isKnockout: isKnockoutRound(m.round),
+      predictedWinnerSide: p.predicted_winner_side,
+      actualWinnerSide: m.winner_side,
     });
     return { ...p, points_awarded: points, score_breakdown: breakdown };
   });
@@ -149,7 +161,7 @@ export async function getStageLeaderboards(): Promise<{
   const [predictionsRes, participantsRes] = await Promise.all([
     supabase
       .from("match_predictions")
-      .select("participant_id, predicted_home, predicted_away, matches!inner(round, status, home_score, away_score)")
+      .select("participant_id, predicted_home, predicted_away, predicted_winner_side, matches!inner(round, status, home_score, away_score, winner_side)")
       .eq("matches.status", "finished")
       .not("predicted_home", "is", null)
       .not("predicted_away", "is", null),
@@ -191,16 +203,26 @@ export async function getStageLeaderboards(): Promise<{
     participant_id: string;
     predicted_home: number;
     predicted_away: number;
-    matches: { round: Match["round"]; status: string; home_score: number | null; away_score: number | null } | null;
+    predicted_winner_side: WinnerSide | null;
+    matches: {
+      round: Match["round"];
+      status: string;
+      home_score: number | null;
+      away_score: number | null;
+      winner_side: WinnerSide | null;
+    } | null;
   }>) {
     if (!pred.matches || pred.matches.home_score === null || pred.matches.away_score === null) continue;
 
-    // Compute points using the same rules as scoring.ts / migration 0010
+    // Compute points using the same rules as scoring.ts / migration 0012
     const { points, breakdown } = scoreMatchPrediction({
       predictedHome: pred.predicted_home,
       predictedAway: pred.predicted_away,
       actualHome: pred.matches.home_score,
       actualAway: pred.matches.away_score,
+      isKnockout: isKnockoutRound(pred.matches.round),
+      predictedWinnerSide: pred.predicted_winner_side,
+      actualWinnerSide: pred.matches.winner_side,
     });
 
     const row = rowFor(pred.participant_id);
@@ -260,7 +282,7 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   // score_breakdown being written to the DB by the scoring step.
   const { data, error } = await supabase
     .from("match_predictions")
-    .select("match_id, predicted_home, predicted_away, matches!inner(home_score, away_score, status)")
+    .select("match_id, predicted_home, predicted_away, predicted_winner_side, matches!inner(round, home_score, away_score, status, winner_side)")
     .eq("matches.status", "finished")
     .not("predicted_home", "is", null)
     .not("predicted_away", "is", null);
@@ -271,7 +293,8 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
     match_id: string;
     predicted_home: number;
     predicted_away: number;
-    matches: { home_score: number | null; away_score: number | null } | null;
+    predicted_winner_side: WinnerSide | null;
+    matches: { round: Match["round"]; home_score: number | null; away_score: number | null; winner_side: WinnerSide | null } | null;
   }>) {
     if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
     const { breakdown } = scoreMatchPrediction({
@@ -279,6 +302,9 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
       predictedAway: row.predicted_away,
       actualHome: row.matches.home_score,
       actualAway: row.matches.away_score,
+      isKnockout: isKnockoutRound(row.matches.round),
+      predictedWinnerSide: row.predicted_winner_side,
+      actualWinnerSide: row.matches.winner_side,
     });
     const t = totals.get(row.match_id) ?? { total: 0, correct: 0, exact: 0 };
     t.total += 1;
@@ -453,6 +479,7 @@ export interface MatchPredictionReveal {
   display_name: string;
   predicted_home: number;
   predicted_away: number;
+  predicted_winner_side: WinnerSide | null;
   points_awarded: number | null;
   exact_score: boolean;
   correct_outcome: boolean;
@@ -468,7 +495,7 @@ export async function getFinishedMatchPredictions(
   // dependency on points_awarded / score_breakdown being written to the DB.
   const { data, error } = await supabase
     .from("match_predictions")
-    .select("match_id, predicted_home, predicted_away, participants(display_name), matches!inner(home_score, away_score, status)")
+    .select("match_id, predicted_home, predicted_away, predicted_winner_side, participants(display_name), matches!inner(round, home_score, away_score, status, winner_side)")
     .in("match_id", matchIds)
     .eq("matches.status", "finished")
     .not("predicted_home", "is", null)
@@ -480,8 +507,9 @@ export async function getFinishedMatchPredictions(
     match_id: string;
     predicted_home: number;
     predicted_away: number;
+    predicted_winner_side: WinnerSide | null;
     participants: { display_name: string } | { display_name: string }[] | null;
-    matches: { home_score: number | null; away_score: number | null } | null;
+    matches: { round: Match["round"]; home_score: number | null; away_score: number | null; winner_side: WinnerSide | null } | null;
   }>) {
     if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
     const { points, breakdown } = scoreMatchPrediction({
@@ -489,6 +517,9 @@ export async function getFinishedMatchPredictions(
       predictedAway: row.predicted_away,
       actualHome: row.matches.home_score,
       actualAway: row.matches.away_score,
+      isKnockout: isKnockoutRound(row.matches.round),
+      predictedWinnerSide: row.predicted_winner_side,
+      actualWinnerSide: row.matches.winner_side,
     });
     const display_name =
       (Array.isArray(row.participants)
@@ -498,6 +529,7 @@ export async function getFinishedMatchPredictions(
       display_name,
       predicted_home: row.predicted_home,
       predicted_away: row.predicted_away,
+      predicted_winner_side: row.predicted_winner_side,
       points_awarded: points,
       exact_score: breakdown.exact_score ?? false,
       correct_outcome: breakdown.correct_outcome ?? false,

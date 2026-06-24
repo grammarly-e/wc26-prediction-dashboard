@@ -4,7 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 
 import { adminTokenHash } from "@/lib/admin-auth";
 import { scoreMatchPrediction } from "@/lib/scoring";
-import type { Database } from "@/lib/types";
+import { isKnockoutRound } from "@/lib/match-utils";
+import type { Database, MatchRound, WinnerSide } from "@/lib/types";
 
 function isAuthenticated(): boolean {
   if (!process.env.ADMIN_PASSWORD) return false;
@@ -29,7 +30,7 @@ export async function POST() {
 
   const { data, error } = await supabase
     .from("matches")
-    .select("id, match_number, external_id, status, kickoff_at, home_score, away_score")
+    .select("id, match_number, external_id, status, kickoff_at, home_score, away_score, round, winner_side")
     .eq("status", "live")
     .lt("kickoff_at", cutoff);
 
@@ -45,6 +46,8 @@ export async function POST() {
     kickoff_at: string;
     home_score: number | null;
     away_score: number | null;
+    round: MatchRound;
+    winner_side: WinnerSide | null;
   }>;
 
   const results: Array<{ matchNumber: number; outcome: string }> = [];
@@ -68,21 +71,26 @@ export async function POST() {
     // Score all predictions for this match now that it's finished.
     const { data: preds } = await supabase
       .from("match_predictions")
-      .select("id, predicted_home, predicted_away")
+      .select("id, predicted_home, predicted_away, predicted_winner_side")
       .eq("match_id", m.id);
 
     if (preds?.length) {
       const actualHome = m.home_score;
       const actualAway = m.away_score;
+      const isKnockout = isKnockoutRound(m.round);
+      const actualWinnerSide = m.winner_side;
       // Batched: independent per-prediction writes, no need to serialize.
       await Promise.all(
-        (preds as { id: string; predicted_home: number; predicted_away: number }[]).map(
+        (preds as { id: string; predicted_home: number; predicted_away: number; predicted_winner_side: WinnerSide | null }[]).map(
           async (p) => {
             const { points, breakdown } = scoreMatchPrediction({
               predictedHome: p.predicted_home,
               predictedAway: p.predicted_away,
               actualHome,
               actualAway,
+              isKnockout,
+              predictedWinnerSide: p.predicted_winner_side,
+              actualWinnerSide,
             });
             await supabase
               .from("match_predictions")

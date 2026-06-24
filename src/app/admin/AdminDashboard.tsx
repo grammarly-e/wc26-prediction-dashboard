@@ -2,8 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ROUND_ORDER, groupByRound } from "@/lib/match-utils";
-import type { Match, MatchStatus } from "@/lib/types";
+import { ROUND_ORDER, groupByRound, isKnockoutRound } from "@/lib/match-utils";
+import type { Match, MatchStatus, WinnerSide } from "@/lib/types";
 
 const STATUS_OPTIONS: MatchStatus[] = [
   "scheduled",
@@ -30,6 +30,24 @@ interface EditState {
   homeScore: string;
   awayScore: string;
   status: MatchStatus;
+  /** Knockout-only: who actually won (including penalties). Null = undecided. */
+  winnerSide: WinnerSide | null;
+  /** Once the admin manually picks a winner, stop auto-defaulting it from the scoreline. */
+  winnerSideTouched: boolean;
+}
+
+/** Auto-default for the winner toggle: whichever side is ahead on the entered
+ *  scoreline. Returns null on a tie or incomplete entry — knockout matches
+ *  can't end level, so a tied 90+ET scoreline (decided on penalties) always
+ *  needs an explicit manual pick. */
+function leadingSide(homeStr: string, awayStr: string): WinnerSide | null {
+  if (homeStr === "" || awayStr === "") return null;
+  const home = parseInt(homeStr, 10);
+  const away = parseInt(awayStr, 10);
+  if (Number.isNaN(home) || Number.isNaN(away)) return null;
+  if (home > away) return "team1";
+  if (away > home) return "team2";
+  return null;
 }
 
 interface MatchEventRow {
@@ -65,6 +83,8 @@ export default function AdminDashboard({
     homeScore: "",
     awayScore: "",
     status: "scheduled",
+    winnerSide: null,
+    winnerSideTouched: false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -102,19 +122,46 @@ export default function AdminDashboard({
       homeScore: match.home_score != null ? String(match.home_score) : "",
       awayScore: match.away_score != null ? String(match.away_score) : "",
       status: match.status,
+      winnerSide: match.winner_side,
+      // An existing winner_side reflects a prior explicit decision (manual
+      // pick or provider sync) — treat it as already-touched so editing the
+      // score doesn't silently flip it via the auto-default.
+      winnerSideTouched: match.winner_side != null,
     });
   }
 
-  async function saveMatch(matchId: string) {
+  async function saveMatch(match: Match) {
+    if (
+      isKnockoutRound(match.round) &&
+      editState.homeScore !== "" &&
+      editState.awayScore !== "" &&
+      !editState.winnerSide
+    ) {
+      alert("Select who won before saving — required for knockout matches (a draw isn't a valid final outcome).");
+      return;
+    }
+    if (isKnockoutRound(match.round) && editState.winnerSide) {
+      const decisive = leadingSide(editState.homeScore, editState.awayScore);
+      if (decisive && decisive !== editState.winnerSide) {
+        const pickedCode = editState.winnerSide === "team1" ? match.team1_code : match.team2_code;
+        alert(
+          `Winner pick (${pickedCode}) doesn't match the scoreline (${editState.homeScore}-${editState.awayScore}). ` +
+          `Fix one before saving — this sets the official result used to score every participant.`
+        );
+        return;
+      }
+    }
     setSaving(true);
     const res = await fetch("/api/admin/update-match", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        matchId,
+        matchId: match.id,
         homeScore: editState.homeScore !== "" ? parseInt(editState.homeScore, 10) : null,
         awayScore: editState.awayScore !== "" ? parseInt(editState.awayScore, 10) : null,
         status: editState.status,
+        round: match.round,
+        winnerSide: editState.winnerSide,
       }),
     });
     setSaving(false);
@@ -404,6 +451,11 @@ export default function AdminDashboard({
                         {m.status === "finished" && m.home_score != null ? (
                           <span className="font-mono text-sm font-bold text-pitch">
                             {m.home_score}-{m.away_score}
+                            {isKnockoutRound(m.round) && m.winner_side && (
+                              <span className="ml-1 font-sans text-xs font-normal text-neutral-400">
+                                ({m.winner_side === "team1" ? m.team1_code : m.team2_code} won)
+                              </span>
+                            )}
                           </span>
                         ) : null}
 
@@ -443,9 +495,14 @@ export default function AdminDashboard({
                               min={0}
                               max={99}
                               value={editState.homeScore}
-                              onChange={(e) =>
-                                setEditState((s) => ({ ...s, homeScore: e.target.value }))
-                              }
+                              onChange={(e) => {
+                                const homeScore = e.target.value;
+                                setEditState((s) => ({
+                                  ...s,
+                                  homeScore,
+                                  winnerSide: s.winnerSideTouched ? s.winnerSide : leadingSide(homeScore, s.awayScore),
+                                }));
+                              }}
                               placeholder="H"
                               className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
                             />
@@ -455,12 +512,47 @@ export default function AdminDashboard({
                               min={0}
                               max={99}
                               value={editState.awayScore}
-                              onChange={(e) =>
-                                setEditState((s) => ({ ...s, awayScore: e.target.value }))
-                              }
+                              onChange={(e) => {
+                                const awayScore = e.target.value;
+                                setEditState((s) => ({
+                                  ...s,
+                                  awayScore,
+                                  winnerSide: s.winnerSideTouched ? s.winnerSide : leadingSide(s.homeScore, awayScore),
+                                }));
+                              }}
                               placeholder="A"
                               className="w-12 rounded border border-neutral-200 px-2 py-1 text-center font-mono text-sm"
                             />
+                            {isKnockoutRound(m.round) && (
+                              <div className="flex items-center gap-1" title="Who actually won (penalties count) — required for knockout matches">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditState((s) => ({ ...s, winnerSide: "team1", winnerSideTouched: true }))
+                                  }
+                                  className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
+                                    editState.winnerSide === "team1"
+                                      ? "bg-pitch text-gold"
+                                      : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+                                  }`}
+                                >
+                                  {m.team1_code} W
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditState((s) => ({ ...s, winnerSide: "team2", winnerSideTouched: true }))
+                                  }
+                                  className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
+                                    editState.winnerSide === "team2"
+                                      ? "bg-pitch text-gold"
+                                      : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+                                  }`}
+                                >
+                                  {m.team2_code} W
+                                </button>
+                              </div>
+                            )}
                             <select
                               value={editState.status}
                               onChange={(e) =>
@@ -478,7 +570,7 @@ export default function AdminDashboard({
                               ))}
                             </select>
                             <button
-                              onClick={() => saveMatch(m.id)}
+                              onClick={() => saveMatch(m)}
                               disabled={saving}
                               className="rounded bg-pitch px-3 py-1 text-xs font-semibold text-gold disabled:opacity-50"
                             >

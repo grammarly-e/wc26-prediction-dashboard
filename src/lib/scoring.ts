@@ -6,15 +6,27 @@
 //
 //   Tier 3 — Exact scoreline (e.g. predicted 2-1, final 2-1)   5 pts
 //   Tier 2 — Correct result AND correct goal diff               3 pts
-//   Tier 1 — Correct result (W/D/L) only                        2 pts
+//   Tier 1 — Correct result (W/D/L, or winner pick) only        2 pts
 //   Tier 0 — Wrong result                                        0 pts
 //
 // An exact scoreline automatically satisfies "correct goal diff" and "correct
 // result", so the exact-score check must fire first to award 5 pts instead of 3.
 // Max per match: 5.
+//
+// Knockout matches (supabase/migrations/0012_knockout_winner_predictions.sql):
+// a draw isn't a valid final outcome — the match always produces a winner,
+// possibly via penalties. So for knockout matches, participants make an
+// explicit winner pick (predictedWinnerSide) alongside their scoreline, and
+// Tier 1 is derived from that pick (predictedWinnerSide === actualWinnerSide)
+// instead of from the scoreline's W/D/L direction. Tiers 3 and 2 stay
+// scoreline-only and unchanged — matches.home_score/away_score already store
+// the 90min+extra-time result with shootout goals stripped out (see
+// regulationAndExtraTimeScore() in providers/football-data.ts), so a 1-1
+// prediction against a 1-1 90+ET draw (settled on penalties) still correctly
+// scores on the scoreline tiers regardless of who won the shootout.
 // ============================================================================
 
-import type { ScoreBreakdown } from "./types";
+import type { ScoreBreakdown, WinnerSide } from "./types";
 
 export const SCORING = {
   EXACT_SCORE: 5,
@@ -35,6 +47,10 @@ export interface MatchScoreInput {
   predictedAway: number;
   actualHome: number;
   actualAway: number;
+  /** Set for knockout-round matches — switches Tier 1 to winner-pick scoring. */
+  isKnockout?: boolean;
+  predictedWinnerSide?: WinnerSide | null;
+  actualWinnerSide?: WinnerSide | null;
 }
 
 export interface MatchScoreResult {
@@ -49,18 +65,26 @@ export interface MatchScoreResult {
  * preview while the match is live).
  */
 export function scoreMatchPrediction(input: MatchScoreInput): MatchScoreResult {
-  const { predictedHome, predictedAway, actualHome, actualAway } = input;
+  const { predictedHome, predictedAway, actualHome, actualAway, isKnockout, predictedWinnerSide, actualWinnerSide } = input;
 
   const exactScore = predictedHome === actualHome && predictedAway === actualAway;
   const sameOutcome = outcomeOf(predictedHome, predictedAway) === outcomeOf(actualHome, actualAway);
   // Only flag goal diff as correct when outcome is also correct — a flipped
   // result with the same margin (e.g. 2-1 predicted, 1-2 actual) scores 0 pts.
+  // Scoreline-only and intentionally unaffected by isKnockout/winner pick —
+  // see module header.
   const sameGoalDiff = sameOutcome && (predictedHome - predictedAway === actualHome - actualAway);
+
+  // Tier 1: knockout matches use the explicit winner pick (no draw possible
+  // in the final outcome); group stage keeps the scoreline-derived W/D/L.
+  const correctOutcome = isKnockout
+    ? predictedWinnerSide != null && predictedWinnerSide === actualWinnerSide
+    : sameOutcome;
 
   let points = 0;
   const breakdown: ScoreBreakdown = {
     exact_score: exactScore,
-    correct_outcome: sameOutcome,
+    correct_outcome: correctOutcome,
     correct_goal_difference: sameGoalDiff,
     close_approximation: false,
   };
@@ -71,13 +95,22 @@ export function scoreMatchPrediction(input: MatchScoreInput): MatchScoreResult {
   } else if (sameGoalDiff) {
     points = SCORING.RESULT_AND_GOAL_DIFF; // 3 pts
     breakdown.points_goal_diff = points;
-  } else if (sameOutcome) {
+  } else if (correctOutcome) {
     points = SCORING.RESULT_ONLY; // 2 pts
     breakdown.points_outcome = points;
   }
 
   breakdown.total = points;
   return { points, breakdown };
+}
+
+/** Maps the football-data.org winner field to our positional team1/team2 slot.
+ *  team1 is always the provider's homeTeam, team2 always awayTeam (see
+ *  syncMatches() in sync.ts) — so HOME_TEAM/AWAY_TEAM map directly across. */
+export function winnerSideFromProvider(winner: "HOME_TEAM" | "AWAY_TEAM" | "DRAW" | null): WinnerSide | null {
+  if (winner === "HOME_TEAM") return "team1";
+  if (winner === "AWAY_TEAM") return "team2";
+  return null;
 }
 
 // ============================================================================

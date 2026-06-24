@@ -17,6 +17,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { scoreMatchPrediction } from "./scoring";
+import { isKnockoutRound } from "./match-utils";
+import type { MatchRound, WinnerSide } from "./types";
 
 // -- Internal types -----------------------------------------------------------
 
@@ -32,6 +34,9 @@ interface DbMatch {
   home_score: number | null;
   away_score: number | null;
   status: string;
+  /** Actual winner (team1/team2 slot), including penalty-shootout outcomes.
+   *  Null for a group-stage draw. See migration 0012. */
+  winner_side: WinnerSide | null;
 }
 
 interface DbTeam {
@@ -156,19 +161,24 @@ async function rescoreAllFinishedMatches(
     finished.map(async (m) => {
       const { data: predictions, error } = await supabase
         .from("match_predictions")
-        .select("id, predicted_home, predicted_away")
+        .select("id, predicted_home, predicted_away, predicted_winner_side")
         .eq("match_id", m.id);
 
       if (error || !predictions?.length) return 0;
 
+      const isKnockout = isKnockoutRound(m.round as MatchRound);
+
       await Promise.all(
-        (predictions as { id: string; predicted_home: number; predicted_away: number }[]).map(
+        (predictions as { id: string; predicted_home: number; predicted_away: number; predicted_winner_side: WinnerSide | null }[]).map(
           async (p) => {
             const { points, breakdown } = scoreMatchPrediction({
               predictedHome: p.predicted_home,
               predictedAway: p.predicted_away,
               actualHome: m.home_score!,
               actualAway: m.away_score!,
+              isKnockout,
+              predictedWinnerSide: p.predicted_winner_side,
+              actualWinnerSide: m.winner_side,
             });
             await supabase
               .from("match_predictions")
@@ -331,22 +341,26 @@ function resolveSlotCode(
     return null;
   }
 
+  // W73/L73-style codes: "winner/loser of match #73". Resolved from
+  // winner_side, NOT from comparing home_score/away_score directly — those
+  // columns hold the 90min+ET score with penalty-shootout goals stripped
+  // (regulationAndExtraTimeScore() in providers/football-data.ts), so a
+  // shootout-decided match always shows a tie there. winner_side is
+  // populated independent of that stripping (sync.ts maps the provider's
+  // score.winner, which does account for penalties) and so resolves
+  // correctly regardless of how the match was decided. See migration 0012.
   const mW = /^W(\d+)$/.exec(code);
   if (mW) {
     const m = matchByNumber.get(Number(mW[1]));
-    if (!m || m.status !== "finished" || m.home_score === null || m.away_score === null) return null;
-    if (m.home_score > m.away_score) return m.team1_id;
-    if (m.away_score > m.home_score) return m.team2_id;
-    return null;
+    if (!m || m.status !== "finished" || !m.winner_side) return null;
+    return m.winner_side === "team1" ? m.team1_id : m.team2_id;
   }
 
   const mL = /^L(\d+)$/.exec(code);
   if (mL) {
     const m = matchByNumber.get(Number(mL[1]));
-    if (!m || m.status !== "finished" || m.home_score === null || m.away_score === null) return null;
-    if (m.home_score > m.away_score) return m.team2_id;
-    if (m.away_score > m.home_score) return m.team1_id;
-    return null;
+    if (!m || m.status !== "finished" || !m.winner_side) return null;
+    return m.winner_side === "team1" ? m.team2_id : m.team1_id;
   }
 
   return null;
@@ -417,7 +431,7 @@ async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: D
 
   const { data: matchData, error: matchErr } = await supabase
     .from("matches")
-    .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status")
+    .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, winner_side")
     .order("match_number", { ascending: true });
   if (matchErr) throw new Error(matchErr.message);
 
