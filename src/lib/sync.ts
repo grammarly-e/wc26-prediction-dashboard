@@ -1,14 +1,14 @@
 // ============================================================================
-// Live data sync — pulls fixtures/scores/standings/scorers from football-data.org
+// Live data sync -- pulls fixtures/scores/standings/scorers from football-data.org
 // and writes them into Supabase, then scores any newly-finished matches.
 //
 // This is the shared core, called from two places:
-//   - scripts/sync-live-data.ts  → `npm run sync` (manual / local runs)
-//   - src/app/api/sync/route.ts  → POST/GET /api/sync (Vercel Cron — see vercel.json)
+//   - scripts/sync-live-data.ts  -> `npm run sync` (manual / local runs)
+//   - src/app/api/sync/route.ts  -> POST/GET /api/sync (Vercel Cron -- see vercel.json)
 //
 // IMPORTANT: this module creates its Supabase client lazily, inside `runSync()`,
 // and throws ordinary Errors rather than calling `process.exit()`. That's not
-// a style nitpick — this file gets imported into a Next.js serverless function
+// a style nitpick -- this file gets imported into a Next.js serverless function
 // (the API route). A module-level `process.exit(1)` or a client constructed at
 // import time with possibly-missing env vars would crash or break the whole
 // function on import, not just the sync call. Keeping all of that inside the
@@ -20,13 +20,13 @@
 //      team names (first run / placeholder resolution).
 //   2. Resolve placeholder slots: when a provider match's home/away team
 //      doesn't yet map to a real `teams` row, upsert the team and backfill
-//      `team1_id`/`team2_id` on the match — this is how "UEFA Path D winner"
+//      `team1_id`/`team2_id` on the match -- this is how "UEFA Path D winner"
 //      becomes "Italy" once qualification concludes.
 //   3. Write score + status + external_id onto the match.
 //   4. When a match transitions into "finished" for the first time, score
 //      every submitted prediction for it via scoreMatchPrediction().
 //   5. Recompute `standings` (group tables) from our own `matches` rows (no
-//      external call), and refresh `top_scorers` (best effort — see the
+//      external call), and refresh `top_scorers` (best effort -- see the
 //      caveat in src/lib/providers/football-data.ts).
 //
 // Respects football-data.org's free-tier rate limit (10 req/min): a full run
@@ -57,7 +57,7 @@ import { recomputeStandingsAndBracket } from "./admin-recompute";
 import type { Database, MatchRound, WinnerSide } from "./types";
 
 // ----------------------------------------------------------------------------
-// Client setup (lazy — see note above on why this lives inside a function)
+// Client setup (lazy -- see note above on why this lives inside a function)
 // ----------------------------------------------------------------------------
 
 function getServiceRoleClient(): SupabaseClient<Database> {
@@ -65,7 +65,7 @@ function getServiceRoleClient(): SupabaseClient<Database> {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
     throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — set them in .env.local (local runs) " +
+      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY -- set them in .env.local (local runs) " +
         "or your hosting provider's environment variables (deployed cron runs)."
     );
   }
@@ -88,7 +88,7 @@ interface DbMatchRow {
   away_score: number | null;
   status: string;
   external_id: string | null;
-  /** Only present on rows pushed onto newlyFinished — see syncMatches(). */
+  /** Only present on rows pushed onto newlyFinished -- see syncMatches(). */
   round?: MatchRound;
   winner_side?: WinnerSide | null;
 }
@@ -126,7 +126,7 @@ async function resolveTeamId(
     if (namesLikelyMatch(team.name, providerTeamName)) return team.id;
   }
 
-  // 3. No match — this is a newly-resolved slot (e.g. a playoff winner that
+  // 3. No match -- this is a newly-resolved slot (e.g. a playoff winner that
   //    just became known). Upsert a real team row for it.
   const { data, error } = await supabase
     .from("teams")
@@ -140,7 +140,7 @@ async function resolveTeamId(
   }
 
   teamsByName.set(data.name.trim().toLowerCase(), data as DbTeamRow);
-  console.log(`  → Resolved placeholder slot "${fallbackCode}" to real team "${providerTeamName}"`);
+  console.log(`  -> Resolved placeholder slot "${fallbackCode}" to real team "${providerTeamName}"`);
   return data.id;
 }
 
@@ -151,7 +151,7 @@ function findDbMatch(provider: ProviderMatch, dbMatches: DbMatchRow[]): DbMatchR
   if (byExternalId) return byExternalId;
 
   // Otherwise match on kickoff time (within 3 hours, to absorb minor schedule
-  // tweaks) — this is what lets us link before external_id has ever been set,
+  // tweaks) -- this is what lets us link before external_id has ever been set,
   // and to re-link if a placeholder's code text doesn't match the provider's
   // resolved team name.
   const providerKickoff = new Date(provider.utcDate).getTime();
@@ -162,7 +162,7 @@ function findDbMatch(provider: ProviderMatch, dbMatches: DbMatchRow[]): DbMatchR
 
   if (candidates.length === 1) return candidates[0];
 
-  // Multiple same-time candidates (rare — simultaneous kickoffs): disambiguate
+  // Multiple same-time candidates (rare -- simultaneous kickoffs): disambiguate
   // by team name overlap with the (possibly placeholder) codes we seeded.
   return candidates.find(
     (m) =>
@@ -212,20 +212,42 @@ async function syncMatches(
 
     // For knockout matches decided on penalties, store the 90-min+extra-time
     // score rather than the provider's fullTime (which has the shootout
-    // goals baked in) — predictions are scored, and the result displays, as
+    // goals baked in) -- predictions are scored, and the result displays, as
     // the W/D/L it actually was after 120 minutes. No-op for matches that
     // never went to penalties (every group-stage fixture, plus any knockout
     // match settled in regulation or extra time).
     const finalScore = regulationAndExtraTimeScore(pm.score);
     const matchRound = mapStage(pm.stage);
 
-    // Actual winner, including penalty-shootout outcomes — null for a
+    // Actual winner, including penalty-shootout outcomes -- null for a
     // group-stage draw. Populated for every match (not just knockout) since
     // it's free off the provider payload and also feeds the bracket-slot
     // resolver in admin-recompute.ts, which needs the true winner of matches
     // decided on penalties (home_score/away_score alone can't tell, since
-    // those columns hold the 90min+ET score — see regulationAndExtraTimeScore()).
+    // those columns hold the 90min+ET score -- see regulationAndExtraTimeScore()).
     const winnerSide = winnerSideFromProvider(pm.score.winner);
+
+    // Guard against football-data.org's free tier intermittently re-serving an
+    // already-finished match as not-finished, or finished with a null score
+    // (a transient/caching quirk on their end -- the mirror image of the stale
+    // "stuck live" problem recoverStaleLiveMatches() already works around
+    // below). Once a match is finished here, only a *new* finished-with-both-
+    // scores payload is allowed to touch its score/status/winner again; a
+    // regression is logged and ignored. Without this guard, one flaky sync
+    // call flips a finished match back to scheduled/live and nulls its score
+    // -- every prediction for that match silently loses its points (on both
+    // the leaderboard and the individual page, since they now share scoring)
+    // until a later sync call "fixes" it again. That flip-flop is what
+    // surfaces to a viewer as leaderboard totals fluctuating between refreshes.
+    const providerHasFinishedScore = isNowFinished && finalScore.home !== null && finalScore.away !== null;
+    const shouldUpdateResult = !wasFinished || providerHasFinishedScore;
+    if (wasFinished && !shouldUpdateResult) {
+      console.warn(
+        `  ! Match #${dbMatch.match_number} is finished (${dbMatch.home_score}-${dbMatch.away_score}) but ` +
+        `provider now reports status=${pm.status} score=${finalScore.home}-${finalScore.away} -- ignoring this ` +
+        `regression and keeping the existing finished result.`
+      );
+    }
 
     // Build the update conditionally: only touch `group_letter` when the
     // provider actually reports one (group-stage fixtures). Knockout fixtures
@@ -237,11 +259,13 @@ async function syncMatches(
       team1_id: team1Id,
       team2_id: team2Id,
       round: matchRound,
-      home_score: finalScore.home,
-      away_score: finalScore.away,
-      winner_side: winnerSide,
-      status: newStatus,
     };
+    if (shouldUpdateResult) {
+      updatePayload.home_score = finalScore.home;
+      updatePayload.away_score = finalScore.away;
+      updatePayload.winner_side = winnerSide;
+      updatePayload.status = newStatus;
+    }
     if (providerGroupLetter) updatePayload.group_letter = providerGroupLetter;
 
     const { error: updateErr } = await supabase.from("matches").update(updatePayload).eq("id", dbMatch.id);
@@ -259,7 +283,7 @@ async function syncMatches(
         team2_id: team2Id,
         status: "finished",
         // Include the (penalty-adjusted) score + round/winner so
-        // scoreFinishedMatch can skip a DB round-trip — must match what was
+        // scoreFinishedMatch can skip a DB round-trip -- must match what was
         // just written above.
         home_score: finalScore.home,
         away_score: finalScore.away,
@@ -301,7 +325,7 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
   // null-check TypeScript already saw at the top of this function.
   const actualHome = match.home_score;
   const actualAway = match.away_score;
-  // round/winner_side are always set on rows passed in here — see syncMatches().
+  // round/winner_side are always set on rows passed in here -- see syncMatches().
   const isKnockout = isKnockoutRound(match.round as MatchRound);
   const actualWinnerSide = match.winner_side ?? null;
 
@@ -334,8 +358,8 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
 // Step 5a: standings
 //
 // Standings are NOT fetched from the provider. They're derived entirely from
-// our own `matches` table (recomputeStandingsAndBracket → computeStandings in
-// admin-recompute.ts — the same function the admin "Recompute" button and the
+// our own `matches` table (recomputeStandingsAndBracket -> computeStandings in
+// admin-recompute.ts -- the same function the admin "Recompute" button and the
 // update-match route use), so the table is always consistent with whatever
 // results we actually have, with no extra API call and no dependency on the
 // provider's standings endpoint being available (it's often not, early in the
@@ -344,7 +368,7 @@ async function scoreFinishedMatch(supabase: SupabaseClient<Database>, match: DbM
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
-// Step 5b: top scorers (best effort — see provider caveat)
+// Step 5b: top scorers (best effort -- see provider caveat)
 // ESPN internal API is used as a fallback when football-data.org returns empty.
 // The ESPN endpoint is undocumented but stable; it begins returning data once
 // matches are played. Both sources normalise to the same flat shape before
@@ -395,7 +419,7 @@ async function fetchScorersFromESPN(): Promise<NormalisedScorer[]> {
 async function buildScorersFromEvents(supabase: SupabaseClient<Database>): Promise<NormalisedScorer[]> {
   const aggregated = await aggregateGoalsFromMatchEvents(supabase);
   // Adapt the shared aggregation's shape to this module's NormalisedScorer
-  // (teamName defaults to "" here instead of null — kept to match this
+  // (teamName defaults to "" here instead of null -- kept to match this
   // function's prior behaviour and downstream namesLikelyMatch() lookups).
   return aggregated.map((s) => ({
     name: s.name,
@@ -443,7 +467,7 @@ async function syncTopScorers(
   const eventScorers = await buildScorersFromEvents(supabase);
   if (eventScorers.length) {
     if (!scorers.length) {
-      // No external data at all — use match_events as the sole source.
+      // No external data at all -- use match_events as the sole source.
       scorers = eventScorers;
       console.log(`  match_events only: ${scorers.length} scorer(s).`);
     } else {
@@ -454,7 +478,7 @@ async function syncTopScorers(
         const key = ev.name.toLowerCase();
         const existing = byName.get(key);
         if (!existing) {
-          // Player present in match_events but not in external API — add them.
+          // Player present in match_events but not in external API -- add them.
           scorers.push(ev);
         } else if (ev.goals > existing.goals) {
           existing.goals = ev.goals;
@@ -467,7 +491,7 @@ async function syncTopScorers(
     return;
   }
 
-  // Goals, then assists, then name — alphabetical only orders players tied
+  // Goals, then assists, then name -- alphabetical only orders players tied
   // on both, instead of leaving them in whatever order the source API/merge
   // happened to produce.
   scorers.sort((a, b) => b.goals - a.goals || b.assists - a.assists || a.name.localeCompare(b.name));
@@ -479,7 +503,7 @@ async function syncTopScorers(
   if (delErr) throw new Error(`top_scorers delete failed: ${delErr.message}`);
 
   // Resolve teams (pure, in-memory) first, then write every row in a single
-  // batched insert — was a sequential insert-per-row loop, which meant a
+  // batched insert -- was a sequential insert-per-row loop, which meant a
   // partial failure could leave the table half-replaced after the delete
   // above. One insert call is atomic: it either writes the whole list or
   // fails the whole list, and is far fewer round trips besides.
@@ -709,7 +733,7 @@ async function fetchGoalEventsFromSofaScore(
         cls === "penalty" ? "penalty_goal" :
         "goal";
 
-      // Map SofaScore isHome → team1 or team2 using the home/away assignment we found
+      // Map SofaScore isHome -> team1 or team2 using the home/away assignment we found
       const isTeam1 = inc.isHome === sofaTeam1IsHome;
       const teamName = isTeam1 ? team1Name : team2Name;
 
@@ -737,7 +761,7 @@ async function fetchGoalEventsFromSofaScore(
 // ----------------------------------------------------------------------------
 // 4th fallback: FIFA.com official API scrape
 // Fetches FIFA's internal API (used by fifa.com and the official app) to look
-// up goal events. Fully defensive — returns [] on any failure.
+// up goal events. Fully defensive -- returns [] on any failure.
 // ----------------------------------------------------------------------------
 
 async function fetchGoalEventsFromFIFA(
@@ -824,7 +848,7 @@ async function fetchGoalEventsFromFIFA(
     const timelineData = await timelineResp.json() as {
       Event?: Array<{
         Type?: number;
-        Team?: number; // 1 = home, 2 = away (or vice versa — needs verification)
+        Team?: number; // 1 = home, 2 = away (or vice versa -- needs verification)
         Time?: number;
         AddedTime?: number;
         PlayerName?: string;
@@ -951,14 +975,14 @@ async function syncMatchEvents(
   try {
     detail = await fetchMatchDetail(Number(externalId));
   } catch (err) {
-    // Graceful degradation — match events are display-only; a failure here
+    // Graceful degradation -- match events are display-only; a failure here
     // must never block scoring or crash the sync run.
     console.warn(`  ! match_events: could not fetch detail for #${matchNumber}: ${(err as Error).message}`);
     return;
   }
 
   if (!detail.goals || detail.goals.length === 0) {
-    // football-data.org has no events — try ESPN/SofaScore/FIFA before giving up.
+    // football-data.org has no events -- try ESPN/SofaScore/FIFA before giving up.
     // A 0-0 result is handled gracefully: all sources will also return no goals.
     await storeExternalMatchEvents(supabase, matchDbId, matchNumber);
     return;
@@ -1002,7 +1026,7 @@ async function syncMatchEvents(
 
 /**
  * Sync events for finished matches that scored (goals > 0) but still lack goal
- * data in the DB — either from a prior capped run or a transient fetch failure.
+ * data in the DB -- either from a prior capped run or a transient fetch failure.
  *
  * `budget` caps API calls so the caller's total never exceeds MAX_EVENT_FETCHES.
  * 0-0 results are skipped intentionally: they have no events to fetch and would
@@ -1024,7 +1048,7 @@ async function backfillMissingMatchEvents(
       .or("home_score.gt.0,away_score.gt.0"),
     supabase.from("match_events").select("match_id"),
   ]);
-  if (finishedRes.error) return; // non-fatal — events are display-only
+  if (finishedRes.error) return; // non-fatal -- events are display-only
 
   const withEvents = new Set(
     (existingRes.data ?? []).map((e: { match_id: string }) => e.match_id)
@@ -1091,10 +1115,10 @@ async function rescoreUnscoredMatches(
 // more than STALE_LIVE_THRESHOLD_HOURS (covers 90 min + 30 min extra time +
 // penalty shootout + generous API-lag buffer), it is certainly over.
 //
-// For matches with scores already in the DB: force status → "finished" and
+// For matches with scores already in the DB: force status -> "finished" and
 // include them in the newly-finished scoring pass. The correct final score is
 // almost certainly what football-data.org last reported while the match was
-// live — if not, the admin panel can correct it.
+// live -- if not, the admin panel can correct it.
 //
 // For matches with no scores: log a warning and leave them for manual fix
 // via the admin panel, since we have no idea what the result was.
@@ -1125,7 +1149,7 @@ async function recoverStaleLiveMatches(
   for (const m of stale) {
     if (m.home_score === null || m.away_score === null) {
       console.warn(
-        `  ! Match #${m.match_number} has been "live" since ${m.kickoff_at} but has no score — ` +
+        `  ! Match #${m.match_number} has been "live" since ${m.kickoff_at} but has no score -- ` +
         `cannot auto-recover. Fix manually via the admin panel.`
       );
       continue;
@@ -1139,7 +1163,7 @@ async function recoverStaleLiveMatches(
       continue;
     }
     console.log(
-      `  ↩ Recovered stale-live match #${m.match_number} → "finished" ` +
+      `  ↩ Recovered stale-live match #${m.match_number} -> "finished" ` +
       `(${m.home_score}-${m.away_score}, kicked off ${m.kickoff_at})`
     );
     recovered.push({ ...m, status: "finished" });
@@ -1158,7 +1182,7 @@ async function recoverStaleLiveMatches(
 // Football-data.org free tier: 10 req/min. A full run uses 2 base calls
 // (fetchMatches, fetchScorers) + up to MAX_EVENT_FETCHES goal-detail calls.
 // Total: 2 + 6 = 8, safely under the limit. (Standings are computed locally
-// from our own `matches` table — no provider call.)
+// from our own `matches` table -- no provider call.)
 const MAX_EVENT_FETCHES = 6;
 
 export async function runSync(): Promise<{ ok: boolean; message: string; finishedScored: number }> {
@@ -1274,7 +1298,7 @@ export async function rebuildTopScorersFromEvents(): Promise<void> {
     .neq("id", "00000000-0000-0000-0000-000000000000");
   if (delErr) throw new Error(`[rebuildTopScorersFromEvents] delete failed: ${delErr.message}`);
 
-  // Single batched insert instead of a sequential insert-per-row loop — see
+  // Single batched insert instead of a sequential insert-per-row loop -- see
   // syncTopScorers() above for why (atomicity: avoids a half-replaced table
   // if one row in the middle of the loop ever failed).
   const rows = scorers.map((s, i) => {

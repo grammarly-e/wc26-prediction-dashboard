@@ -2,12 +2,12 @@
 // Server-side data access for the prediction-submission and leaderboard pages.
 //
 // Counterpart to src/lib/data.ts (which handles the read-only live-tournament
-// views). Everything here either reads/writes participant-owned rows — which
+// views). Everything here either reads/writes participant-owned rows -- which
 // RLS (supabase/migrations/0002_row_level_security.sql) restricts to "your
-// own, before kickoff/lock" — or reads the public `leaderboard` view.
+// own, before kickoff/lock" -- or reads the public `leaderboard` view.
 //
 // Identity: participants sign in via Supabase anonymous auth (just a display
-// name, no email/password — see JoinForm.tsx). `getCurrentParticipant()` is
+// name, no email/password -- see JoinForm.tsx). `getCurrentParticipant()` is
 // the single source of truth for "who is looking at this page right now,"
 // and every page below should call it before deciding what to render.
 // ============================================================================
@@ -103,9 +103,14 @@ export interface StageLeaderboardRow {
 // Live-scoring enrichment helper
 //
 // Replaces stale/null points_awarded and score_breakdown on MatchPredictions
-// with values computed directly from match scores — the same rules used by the
-// leaderboard SQL view in migration 0010. Predictions for unfinished matches
-// are returned unchanged (points_awarded remains null).
+// with values computed directly from match scores -- the same rules used by
+// the leaderboard SQL view in migration 0010. Predictions for unfinished
+// matches are returned unchanged (points_awarded remains null).
+//
+// This is the single function that decides what any prediction is worth.
+// getParticipantMatchPredictions() (the individual page) and
+// getStageLeaderboards() (the public leaderboard) both call it on the same
+// raw rows, so the two views cannot disagree about a match's points.
 // ============================================================================
 
 async function enrichMatchPredictions(
@@ -154,35 +159,32 @@ export async function getStageLeaderboards(): Promise<{
   groupStage: StageLeaderboardRow[];
   knockout: StageLeaderboardRow[];
 }> {
-  // Service role, deliberately: this is the public, shared point total, not a
-  // viewer-scoped read. createServerSupabaseClient() would apply RLS as the
-  // current viewer's own session, and the "see others match predictions after
-  // kickoff" policy (0002_row_level_security.sql) gates other participants'
-  // rows on `kickoff_at <= now()` -- a field that is independent of, and can
-  // drift out of sync with, `status`/score data. That mismatch silently
-  // dropped specific participant+match combinations from the leaderboard
-  // while those same rows scored correctly on the participant's own page
-  // (getParticipantMatchPredictions() already uses the service role client
-  // for exactly this reason). Bypassing RLS here makes the leaderboard match
-  // the same trusted data path the individual page already uses.
+  // Service role -- no viewer-scoped RLS on a public, shared total.
   const supabase = createServiceRoleClient();
-  // Compute points live from match scores — no dependency on points_awarded.
-  // This mirrors the SQL scoring in leaderboard view migration 0010 so that
-  // the stage breakdown updates the moment match scores land in the DB.
-  const [predictionsRes, participantsRes] = await Promise.all([
-    supabase
-      .from("match_predictions")
-      .select("participant_id, predicted_home, predicted_away, predicted_winner_side, matches!inner(round, status, home_score, away_score, winner_side)")
-      .eq("matches.status", "finished")
-      .not("predicted_home", "is", null)
-      .not("predicted_away", "is", null),
+
+  const [predictionsRes, participantsRes, matchesRes] = await Promise.all([
+    supabase.from("match_predictions").select("*"),
     supabase.from("participants").select("id, display_name"),
+    supabase.from("matches").select("id, round"),
   ]);
   if (predictionsRes.error) throw predictionsRes.error;
   if (participantsRes.error) throw participantsRes.error;
+  if (matchesRes.error) throw matchesRes.error;
 
   const participantsList = participantsRes.data as Array<{ id: string; display_name: string }>;
   const nameById = new Map(participantsList.map((p) => [p.id, p.display_name]));
+  const roundByMatchId = new Map(
+    (matchesRes.data as Array<{ id: string; round: Match["round"] }>).map((m) => [m.id, m.round])
+  );
+
+  // Deliberately the SAME enrichment call getParticipantMatchPredictions()
+  // (the individual page) uses on the same raw rows -- one function decides
+  // what a prediction is worth, used in both places, so the public
+  // leaderboard total and a participant's own page total cannot diverge.
+  const enriched = await enrichMatchPredictions(
+    predictionsRes.data as MatchPrediction[],
+    supabase
+  );
 
   const totals = new Map<string, StageLeaderboardRow>();
   function rowFor(participantId: string): StageLeaderboardRow {
@@ -206,47 +208,32 @@ export async function getStageLeaderboards(): Promise<{
   }
 
   // Pre-seed every participant so both stage leaderboards are fully
-  // populated from day one — the knockout table shows everyone at 0 points
+  // populated from day one -- the knockout table shows everyone at 0 points
   // rather than disappearing until the first knockout match finishes.
   for (const p of participantsList) rowFor(p.id);
 
-  for (const pred of predictionsRes.data as unknown as Array<{
-    participant_id: string;
-    predicted_home: number;
-    predicted_away: number;
-    predicted_winner_side: WinnerSide | null;
-    matches: {
-      round: Match["round"];
-      status: string;
-      home_score: number | null;
-      away_score: number | null;
-      winner_side: WinnerSide | null;
-    } | null;
-  }>) {
-    if (!pred.matches || pred.matches.home_score === null || pred.matches.away_score === null) continue;
-
-    // Compute points using the same rules as scoring.ts / migration 0012
-    const { points, breakdown } = scoreMatchPrediction({
-      predictedHome: pred.predicted_home,
-      predictedAway: pred.predicted_away,
-      actualHome: pred.matches.home_score,
-      actualAway: pred.matches.away_score,
-      isKnockout: isKnockoutRound(pred.matches.round),
-      predictedWinnerSide: pred.predicted_winner_side,
-      actualWinnerSide: pred.matches.winner_side,
-    });
+  for (const pred of enriched) {
+    // enrichMatchPredictions() only assigns a non-null points_awarded when it
+    // found a finished match with both scores set -- so this is exactly the
+    // "has this match actually scored" check, using the same decision the
+    // individual page relies on, not a second independent one.
+    if (pred.points_awarded === null || pred.points_awarded === undefined) continue;
+    const round = roundByMatchId.get(pred.match_id);
+    if (!round) continue;
 
     const row = rowFor(pred.participant_id);
-    if (isKnockoutRound(pred.matches.round)) {
-      row.knockout_points += points;
+    const isExact = pred.score_breakdown?.exact_score ?? false;
+    const isCorrect = pred.score_breakdown?.correct_outcome ?? false;
+    if (isKnockoutRound(round)) {
+      row.knockout_points += pred.points_awarded;
       row.knockout_matches_scored += 1;
-      if (breakdown.exact_score) row.knockout_exact_hits += 1;
-      if (breakdown.correct_outcome) row.knockout_correct_outcomes += 1;
+      if (isExact) row.knockout_exact_hits += 1;
+      if (isCorrect) row.knockout_correct_outcomes += 1;
     } else {
-      row.group_stage_points += points;
+      row.group_stage_points += pred.points_awarded;
       row.group_stage_matches_scored += 1;
-      if (breakdown.exact_score) row.group_stage_exact_hits += 1;
-      if (breakdown.correct_outcome) row.group_stage_correct_outcomes += 1;
+      if (isExact) row.group_stage_exact_hits += 1;
+      if (isCorrect) row.group_stage_correct_outcomes += 1;
     }
   }
 
@@ -292,7 +279,7 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   // a public, viewer-independent aggregate (shown to everyone on MatchCard),
   // so it must not be silently filtered by the viewer's own RLS session.
   const supabase = createServiceRoleClient();
-  // Join to matches so we can compute outcomes live — no dependency on
+  // Join to matches so we can compute outcomes live -- no dependency on
   // score_breakdown being written to the DB by the scoring step.
   const { data, error } = await supabase
     .from("match_predictions")
@@ -341,7 +328,7 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
 }
 
 // ============================================================================
-// Leaderboard breakdown — predictions visible to the current viewer
+// Leaderboard breakdown -- predictions visible to the current viewer
 // ============================================================================
 
 export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<string, MatchPrediction[]>> {
@@ -363,7 +350,7 @@ export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<str
 }
 
 // ============================================================================
-// Public participants view — ALL predictions visible to everyone
+// Public participants view -- ALL predictions visible to everyone
 // ============================================================================
 
 export async function getParticipantMatchPredictions(
@@ -376,7 +363,7 @@ export async function getParticipantMatchPredictions(
     .eq("participant_id", participantId)
     .order("match_id");
   if (error) throw error;
-  // Cast client to satisfy the helper type — both server and service role
+  // Cast client to satisfy the helper type -- both server and service role
   // clients expose the same SupabaseClient<Database> interface.
   return enrichMatchPredictions(
     data as MatchPrediction[],
@@ -398,7 +385,7 @@ export async function getParticipantById(
 }
 
 // ============================================================================
-// Award accuracy — all participants' tournament picks, for the leaderboard
+// Award accuracy -- all participants' tournament picks, for the leaderboard
 // accuracy display. Informational only (no points shown).
 // ============================================================================
 
@@ -486,7 +473,7 @@ export async function getAllFavouritePicks(): Promise<ParticipantFavouritePicks[
 }
 
 // ============================================================================
-// Per-participant predictions for finished matches — revealed after result
+// Per-participant predictions for finished matches -- revealed after result
 // ============================================================================
 
 export interface MatchPredictionReveal {
@@ -505,7 +492,7 @@ export async function getFinishedMatchPredictions(
   if (matchIds.length === 0) return new Map();
   const supabase = createServiceRoleClient();
 
-  // Join to matches to get scores so we can compute points live — no
+  // Join to matches to get scores so we can compute points live -- no
   // dependency on points_awarded / score_breakdown being written to the DB.
   const { data, error } = await supabase
     .from("match_predictions")
