@@ -144,6 +144,65 @@ async function patchTeamGroupLetters(
   return patched;
 }
 
+// -- Step 0c: Patch matches whose score implies "finished" but whose status
+//    was never flipped ----------------------------------------------------
+//
+// A match can end up with home_score/away_score set while status is stuck on
+// "scheduled" (or "postponed"/"cancelled"): the live-data sync never matched
+// the fixture (e.g. an ambiguous simultaneous-kickoff lookup -- see
+// findDbMatch() in sync.ts) so the row's status was never touched by sync,
+// and an admin then typed in the final score by hand without also changing
+// the Status dropdown. /api/admin/update-match scores predictions the moment
+// both scores are present, "regardless of status" (see that route's comment),
+// so points_awarded ends up correct -- which is why the participant's own
+// predictions page (enrichMatchPredictions() falls back to the stored
+// points_awarded when a match isn't currently "finished") shows the right
+// number. But computeStandings(), getStageLeaderboards(), getMatchInsights()
+// and getFinishedMatchPredictions() (predictions.ts) all do a fresh,
+// no-fallback recompute gated strictly on status === "finished", so the
+// match is silently excluded from every leaderboard/standings total even
+// though it has a fully valid, already-scored result.
+//
+// A "scheduled"/"postponed"/"cancelled" match can never legitimately have
+// both scores set, so flipping it to "finished" here is always a correction,
+// never a judgment call -- unlike a "live" match's current score, which may
+// genuinely not be final yet. That case is handled separately (and more
+// cautiously, with a time-based cutoff) by recoverStaleLiveMatches() in
+// sync.ts, so "live" rows are intentionally left untouched here.
+async function patchStuckFinishedStatus(
+  supabase: SupabaseClient,
+  matches: DbMatch[]
+): Promise<number> {
+  const stuck = matches.filter(
+    (m) =>
+      m.status !== "finished" &&
+      m.status !== "live" &&
+      m.home_score !== null &&
+      m.away_score !== null
+  );
+  if (!stuck.length) return 0;
+
+  const { error } = await supabase
+    .from("matches")
+    .update({ status: "finished", updated_at: new Date().toISOString() })
+    .in("id", stuck.map((m) => m.id));
+  if (error) {
+    console.error(`[patchStuckFinishedStatus] failed: ${error.message}`);
+    return 0;
+  }
+
+  // Keep the caller's in-memory copy consistent with the DB write, and score
+  // these matches' predictions immediately -- they were never scored by the
+  // single-match path in update-match/route.ts (that only fires for the one
+  // match an admin is actively editing), so without this they would sit with
+  // a corrected status but stale/null points_awarded until something else
+  // happened to rescore them.
+  for (const m of stuck) m.status = "finished";
+  await rescoreAllFinishedMatches(supabase, stuck);
+
+  return stuck.length;
+}
+
 // -- Step 1: Rescore all finished match predictions ---------------------------
 
 async function rescoreAllFinishedMatches(
@@ -425,7 +484,9 @@ async function resolveKnockoutSlots(
 
 // -- Helper: patch names + fetch matches + patch group letters + re-fetch teams
 
-async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: DbMatch[]; teams: DbTeam[] }> {
+async function fetchAndPatchData(
+  supabase: SupabaseClient
+): Promise<{ matches: DbMatch[]; teams: DbTeam[]; statusPatched: number }> {
   // Normalize name variants first (e.g. "Turkiye" -> "Turkey").
   await patchTeamNames(supabase);
 
@@ -437,6 +498,11 @@ async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: D
 
   const matches = matchData as DbMatch[];
 
+  // Fix any match whose score implies it's over but whose status was never
+  // updated to match (see patchStuckFinishedStatus doc comment above) --
+  // before computing standings, so this same pass picks the correction up.
+  const statusPatched = await patchStuckFinishedStatus(supabase, matches);
+
   // Patch any teams whose group_letter is NULL but appear in group stage matches.
   await patchTeamGroupLetters(supabase, matches);
 
@@ -446,7 +512,7 @@ async function fetchAndPatchData(supabase: SupabaseClient): Promise<{ matches: D
     .select("id, group_letter, is_placeholder");
   if (teamErr) throw new Error(teamErr.message);
 
-  return { matches, teams: teamData as DbTeam[] };
+  return { matches, teams: teamData as DbTeam[], statusPatched };
 }
 
 // -- Public API ---------------------------------------------------------------
@@ -455,11 +521,16 @@ export interface RecomputeResult {
   predictionsRescored: number;
   groupsRecomputed: number;
   slotsUpdated: number;
+  /** Matches whose status was auto-corrected to "finished" because both
+   *  scores were already present (see patchStuckFinishedStatus). Non-zero
+   *  here means those matches were previously invisible to the leaderboard
+   *  despite having a valid scored result. */
+  statusPatched: number;
 }
 
-/** Full recompute: normalises names + patches team groups + rescores all predictions + standings + bracket. */
+/** Full recompute: normalises names + patches team groups/stuck statuses + rescores all predictions + standings + bracket. */
 export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeResult> {
-  const { matches, teams } = await fetchAndPatchData(supabase);
+  const { matches, teams, statusPatched } = await fetchAndPatchData(supabase);
 
   const [predictionsRescored, standings] = await Promise.all([
     rescoreAllFinishedMatches(supabase, matches),
@@ -469,21 +540,23 @@ export async function recomputeAll(supabase: SupabaseClient): Promise<RecomputeR
   await upsertStandings(supabase, standings);
   const slotsUpdated = await resolveKnockoutSlots(supabase, matches, standings);
 
-  return { predictionsRescored, groupsRecomputed: standings.size, slotsUpdated };
+  return { predictionsRescored, groupsRecomputed: standings.size, slotsUpdated, statusPatched };
 }
 
 /**
- * Standings + bracket recompute only -- skips rescoring predictions.
+ * Standings + bracket recompute only -- skips rescoring predictions (except
+ * for any match patchStuckFinishedStatus just unstuck, which it scores
+ * itself since nothing else will have touched them).
  * Call this after update-match has already scored the specific match inline.
  */
 export async function recomputeStandingsAndBracket(
   supabase: SupabaseClient
-): Promise<{ groupsRecomputed: number; slotsUpdated: number }> {
-  const { matches, teams } = await fetchAndPatchData(supabase);
+): Promise<{ groupsRecomputed: number; slotsUpdated: number; statusPatched: number }> {
+  const { matches, teams, statusPatched } = await fetchAndPatchData(supabase);
 
   const standings = computeStandings(teams, matches);
   await upsertStandings(supabase, standings);
   const slotsUpdated = await resolveKnockoutSlots(supabase, matches, standings);
 
-  return { groupsRecomputed: standings.size, slotsUpdated };
+  return { groupsRecomputed: standings.size, slotsUpdated, statusPatched };
 }

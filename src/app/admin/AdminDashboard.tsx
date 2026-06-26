@@ -151,6 +151,27 @@ export default function AdminDashboard({
         return;
       }
     }
+    // A "Scheduled"/"Postponed"/"Cancelled" match can never legitimately have
+    // both scores filled in -- that combination has previously caused
+    // matches to score correctly on a participant's own page while being
+    // silently excluded from the leaderboard, which strictly requires status
+    // === "finished". Catch the likely oversight (score entered, Status
+    // dropdown left unchanged) before it reaches the server. "Live" is left
+    // out of this check on purpose -- a provisional in-progress score there
+    // is a legitimate, intentional state.
+    if (
+      editState.homeScore !== "" &&
+      editState.awayScore !== "" &&
+      editState.status !== "finished" &&
+      editState.status !== "live"
+    ) {
+      alert(
+        `Status is still "${editState.status}" but both scores are filled in. ` +
+        `Set Status to "Finished" (or "Live" if this is a provisional in-progress score) before saving — ` +
+        `otherwise this match will score correctly on participants' own pages but be dropped from the leaderboard.`
+      );
+      return;
+    }
     setSaving(true);
     const res = await fetch("/api/admin/update-match", {
       method: "POST",
@@ -279,9 +300,15 @@ export default function AdminDashboard({
     // 2. Recompute Standings & Bracket
     try {
       const res = await fetch("/api/admin/recompute", { method: "POST" });
-      const body = await res.json() as { groupsRecomputed?: number; slotsUpdated?: number; error?: string };
+      const body = await res.json() as {
+        groupsRecomputed?: number;
+        slotsUpdated?: number;
+        statusPatched?: number;
+        error?: string;
+      };
       parts.push(res.ok
-        ? `Standings: ${body.groupsRecomputed ?? 0} groups, ${body.slotsUpdated ?? 0} slots`
+        ? `Standings: ${body.groupsRecomputed ?? 0} groups, ${body.slotsUpdated ?? 0} slots` +
+          (body.statusPatched ? `, ${body.statusPatched} match(es) un-stuck from leaderboard` : "")
         : `Standings error: ${body.error ?? "unknown"}`);
     } catch (e) {
       parts.push(`Standings error: ${(e as Error).message}`);
