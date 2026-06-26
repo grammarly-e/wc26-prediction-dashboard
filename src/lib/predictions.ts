@@ -154,7 +154,18 @@ export async function getStageLeaderboards(): Promise<{
   groupStage: StageLeaderboardRow[];
   knockout: StageLeaderboardRow[];
 }> {
-  const supabase = createServerSupabaseClient();
+  // Service role, deliberately: this is the public, shared point total, not a
+  // viewer-scoped read. createServerSupabaseClient() would apply RLS as the
+  // current viewer's own session, and the "see others match predictions after
+  // kickoff" policy (0002_row_level_security.sql) gates other participants'
+  // rows on `kickoff_at <= now()` -- a field that is independent of, and can
+  // drift out of sync with, `status`/score data. That mismatch silently
+  // dropped specific participant+match combinations from the leaderboard
+  // while those same rows scored correctly on the participant's own page
+  // (getParticipantMatchPredictions() already uses the service role client
+  // for exactly this reason). Bypassing RLS here makes the leaderboard match
+  // the same trusted data path the individual page already uses.
+  const supabase = createServiceRoleClient();
   // Compute points live from match scores — no dependency on points_awarded.
   // This mirrors the SQL scoring in leaderboard view migration 0010 so that
   // the stage breakdown updates the moment match scores land in the DB.
@@ -277,7 +288,10 @@ export interface MatchInsight {
 }
 
 export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
-  const supabase = createServerSupabaseClient();
+  // Service role -- see the comment in getStageLeaderboards() above. This is
+  // a public, viewer-independent aggregate (shown to everyone on MatchCard),
+  // so it must not be silently filtered by the viewer's own RLS session.
+  const supabase = createServiceRoleClient();
   // Join to matches so we can compute outcomes live — no dependency on
   // score_breakdown being written to the DB by the scoring step.
   const { data, error } = await supabase
