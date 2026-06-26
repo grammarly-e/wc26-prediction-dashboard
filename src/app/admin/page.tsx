@@ -1,6 +1,7 @@
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getMatches } from "@/lib/data";
+import { fetchAllRows } from "@/lib/predictions";
 import AdminLoginForm from "./AdminLoginForm";
 import AdminDashboard, { type ParticipantRow } from "./AdminDashboard";
 
@@ -9,20 +10,24 @@ export const revalidate = 0;
 async function getParticipantsWithCounts(): Promise<ParticipantRow[]> {
   const supabase = createServiceRoleClient();
 
-  const [{ data: participants, error: pErr }, { data: preds, error: cErr }] =
-    await Promise.all([
-      supabase
-        .from("participants")
-        .select("id, display_name, created_at")
-        .order("created_at", { ascending: true }),
-      supabase.from("match_predictions").select("participant_id"),
-    ]);
+  // match_predictions read is paginated (see fetchAllRows in predictions.ts):
+  // this scans every participant's rows with no per-participant filter, the
+  // same unbounded-read shape that silently truncates at Supabase's 1000-row
+  // default cap once the table grows past it.
+  const [{ data: participants, error: pErr }, preds] = await Promise.all([
+    supabase
+      .from("participants")
+      .select("id, display_name, created_at")
+      .order("created_at", { ascending: true }),
+    fetchAllRows<{ participant_id: string }>((from, to) =>
+      supabase.from("match_predictions").select("participant_id").range(from, to)
+    ),
+  ]);
 
   if (pErr) throw pErr;
-  if (cErr) throw cErr;
 
   const countMap = new Map<string, number>();
-  for (const row of (preds ?? []) as { participant_id: string }[]) {
+  for (const row of preds) {
     countMap.set(row.participant_id, (countMap.get(row.participant_id) ?? 0) + 1);
   }
 

@@ -100,6 +100,52 @@ export interface StageLeaderboardRow {
 }
 
 // ============================================================================
+// Pagination helper
+//
+// Supabase/PostgREST caps a bare `.select()` at 1000 rows by default, no
+// matter how many rows actually match the query, and a capped read does NOT
+// error -- it just silently returns the first page. Any query below that
+// scans match_predictions across ALL participants (instead of one
+// participant's own rows, which always fits) can cross that cap well before
+// the tournament ends: 18 participants x up to 104 matches each is up to
+// 1,872 rows, already past 1,000 by the third group-stage matchday alone.
+// Whichever participants' rows fell outside the first page then silently
+// lose those matches' points on the leaderboard -- while a participant's own
+// page (filtered to .eq("participant_id", ...), max 104 rows) never hits the
+// cap and stays correct. That split is exactly what produced "individual
+// page is right, leaderboard is short by some flat amount" for one
+// participant rather than everyone equally.
+//
+// Fix: page through with .range() until a page comes back shorter than a
+// full page, accumulating every row, instead of trusting a single .select().
+// ============================================================================
+
+const PAGE_SIZE = 1000;
+
+export async function fetchAllRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>
+): Promise<T[]> {
+  // `data` is typed `unknown` (not `T[]`) on purpose: Supabase's inferred
+  // type for a joined `select()` (e.g. `matches!inner(...)`) often doesn't
+  // structurally match the hand-written row type callers want here, the same
+  // reason call sites in this file previously needed `as unknown as Array<...>`.
+  // Trusting the caller's generic via a single cast here, instead of forcing
+  // every call site to fight the join typing, reproduces that same trust
+  // without repeating the cast at every call site.
+  const all: T[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await page(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data as T[] | null) ?? [];
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
+// ============================================================================
 // Live-scoring enrichment helper
 //
 // Replaces stale/null points_awarded and score_breakdown on MatchPredictions
@@ -162,12 +208,13 @@ export async function getStageLeaderboards(): Promise<{
   // Service role -- no viewer-scoped RLS on a public, shared total.
   const supabase = createServiceRoleClient();
 
-  const [predictionsRes, participantsRes, matchesRes] = await Promise.all([
-    supabase.from("match_predictions").select("*"),
+  const [allPredictions, participantsRes, matchesRes] = await Promise.all([
+    fetchAllRows<MatchPrediction>((from, to) =>
+      supabase.from("match_predictions").select("*").range(from, to)
+    ),
     supabase.from("participants").select("id, display_name"),
     supabase.from("matches").select("id, round"),
   ]);
-  if (predictionsRes.error) throw predictionsRes.error;
   if (participantsRes.error) throw participantsRes.error;
   if (matchesRes.error) throw matchesRes.error;
 
@@ -181,10 +228,7 @@ export async function getStageLeaderboards(): Promise<{
   // (the individual page) uses on the same raw rows -- one function decides
   // what a prediction is worth, used in both places, so the public
   // leaderboard total and a participant's own page total cannot diverge.
-  const enriched = await enrichMatchPredictions(
-    predictionsRes.data as MatchPrediction[],
-    supabase
-  );
+  const enriched = await enrichMatchPredictions(allPredictions, supabase);
 
   const totals = new Map<string, StageLeaderboardRow>();
   function rowFor(participantId: string): StageLeaderboardRow {
@@ -280,23 +324,28 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
   // so it must not be silently filtered by the viewer's own RLS session.
   const supabase = createServiceRoleClient();
   // Join to matches so we can compute outcomes live -- no dependency on
-  // score_breakdown being written to the DB by the scoring step.
-  const { data, error } = await supabase
-    .from("match_predictions")
-    .select("match_id, predicted_home, predicted_away, predicted_winner_side, matches!inner(round, home_score, away_score, status, winner_side)")
-    .eq("matches.status", "finished")
-    .not("predicted_home", "is", null)
-    .not("predicted_away", "is", null);
-  if (error) throw error;
-
-  const totals = new Map<string, { total: number; correct: number; exact: number }>();
-  for (const row of data as unknown as Array<{
+  // score_breakdown being written to the DB by the scoring step. Paginated
+  // (see fetchAllRows) -- this scans every participant's predictions for
+  // every finished match, which crosses the 1000-row default cap well
+  // before the tournament ends.
+  const data = await fetchAllRows<{
     match_id: string;
     predicted_home: number;
     predicted_away: number;
     predicted_winner_side: WinnerSide | null;
     matches: { round: Match["round"]; home_score: number | null; away_score: number | null; winner_side: WinnerSide | null } | null;
-  }>) {
+  }>((from, to) =>
+    supabase
+      .from("match_predictions")
+      .select("match_id, predicted_home, predicted_away, predicted_winner_side, matches!inner(round, home_score, away_score, status, winner_side)")
+      .eq("matches.status", "finished")
+      .not("predicted_home", "is", null)
+      .not("predicted_away", "is", null)
+      .range(from, to)
+  );
+
+  const totals = new Map<string, { total: number; correct: number; exact: number }>();
+  for (const row of data) {
     if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
     const { breakdown } = scoreMatchPrediction({
       predictedHome: row.predicted_home,
@@ -333,12 +382,15 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
 
 export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<string, MatchPrediction[]>> {
   const supabase = createServerSupabaseClient();
-  const { data, error } = await supabase.from("match_predictions").select("*");
-  if (error) throw error;
+  // Paginated (see fetchAllRows) -- scans every participant's predictions,
+  // which crosses the 1000-row default cap well before the tournament ends.
+  const allPredictions = await fetchAllRows<MatchPrediction>((from, to) =>
+    supabase.from("match_predictions").select("*").range(from, to)
+  );
 
   // Enrich with live-computed points so the leaderboard breakdown dropdown
   // reflects current match scores without waiting for the scoring step.
-  const enriched = await enrichMatchPredictions(data as MatchPrediction[], supabase);
+  const enriched = await enrichMatchPredictions(allPredictions, supabase);
 
   const byParticipant = new Map<string, MatchPrediction[]>();
   for (const row of enriched) {
@@ -494,24 +546,30 @@ export async function getFinishedMatchPredictions(
 
   // Join to matches to get scores so we can compute points live -- no
   // dependency on points_awarded / score_breakdown being written to the DB.
-  const { data, error } = await supabase
-    .from("match_predictions")
-    .select("match_id, predicted_home, predicted_away, predicted_winner_side, participants(display_name), matches!inner(round, home_score, away_score, status, winner_side)")
-    .in("match_id", matchIds)
-    .eq("matches.status", "finished")
-    .not("predicted_home", "is", null)
-    .not("predicted_away", "is", null);
-  if (error) throw error;
-
-  const result = new Map<string, MatchPredictionReveal[]>();
-  for (const row of data as unknown as Array<{
+  // Paginated (see fetchAllRows): matchIds here is "every finished match"
+  // (see src/app/page.tsx), so this is every participant's prediction for
+  // every finished match -- crosses the 1000-row default cap well before
+  // the tournament ends.
+  const data = await fetchAllRows<{
     match_id: string;
     predicted_home: number;
     predicted_away: number;
     predicted_winner_side: WinnerSide | null;
     participants: { display_name: string } | { display_name: string }[] | null;
     matches: { round: Match["round"]; home_score: number | null; away_score: number | null; winner_side: WinnerSide | null } | null;
-  }>) {
+  }>((from, to) =>
+    supabase
+      .from("match_predictions")
+      .select("match_id, predicted_home, predicted_away, predicted_winner_side, participants(display_name), matches!inner(round, home_score, away_score, status, winner_side)")
+      .in("match_id", matchIds)
+      .eq("matches.status", "finished")
+      .not("predicted_home", "is", null)
+      .not("predicted_away", "is", null)
+      .range(from, to)
+  );
+
+  const result = new Map<string, MatchPredictionReveal[]>();
+  for (const row of data) {
     if (!row.matches || row.matches.home_score === null || row.matches.away_score === null) continue;
     const { points, breakdown } = scoreMatchPrediction({
       predictedHome: row.predicted_home,
