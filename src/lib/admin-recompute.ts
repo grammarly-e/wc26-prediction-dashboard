@@ -37,6 +37,10 @@ interface DbMatch {
   /** Actual winner (team1/team2 slot), including penalty-shootout outcomes.
    *  Null for a group-stage draw. See migration 0012. */
   winner_side: WinnerSide | null;
+  /** Admin override locks -- when true, resolveKnockoutSlots() leaves the
+   *  corresponding team_id untouched. See migration 0013. */
+  team1_locked: boolean;
+  team2_locked: boolean;
 }
 
 interface DbTeam {
@@ -459,13 +463,28 @@ async function resolveKnockoutSlots(
     .filter((m) => m.round !== "Group Stage")
     .sort((a, b) => a.match_number - b.match_number);
 
+  // An admin-locked side keeps whatever team_id it already has, permanently,
+  // until explicitly unlocked (see migration 0013 / override-match-teams
+  // route). If that pinned team happens to be one of the 8 best thirds, mark
+  // it assigned up front so the greedy assignment below doesn't also hand
+  // the same team to a different match's still-unresolved "3X/Y/Z" slot.
+  const thirdTeamIds = new Set(allThirds.map((t) => t.team_id));
+  for (const m of knockout) {
+    if (m.team1_locked && m.team1_id && thirdTeamIds.has(m.team1_id)) assignedThirds.add(m.team1_id);
+    if (m.team2_locked && m.team2_id && thirdTeamIds.has(m.team2_id)) assignedThirds.add(m.team2_id);
+  }
+
   let updated = 0;
   for (const m of knockout) {
-    const newT1 = resolveSlotCode(m.team1_code, groupWinners, groupRunnersUp, allThirds, assignedThirds, matchByNumber);
-    const newT2 = resolveSlotCode(m.team2_code, groupWinners, groupRunnersUp, allThirds, assignedThirds, matchByNumber);
+    const newT1 = m.team1_locked
+      ? null
+      : resolveSlotCode(m.team1_code, groupWinners, groupRunnersUp, allThirds, assignedThirds, matchByNumber);
+    const newT2 = m.team2_locked
+      ? null
+      : resolveSlotCode(m.team2_code, groupWinners, groupRunnersUp, allThirds, assignedThirds, matchByNumber);
 
-    const t1Final = newT1 ?? m.team1_id;
-    const t2Final = newT2 ?? m.team2_id;
+    const t1Final = m.team1_locked ? m.team1_id : (newT1 ?? m.team1_id);
+    const t2Final = m.team2_locked ? m.team2_id : (newT2 ?? m.team2_id);
     const changed = t1Final !== m.team1_id || t2Final !== m.team2_id;
 
     if (changed) {
@@ -492,7 +511,7 @@ async function fetchAndPatchData(
 
   const { data: matchData, error: matchErr } = await supabase
     .from("matches")
-    .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, winner_side")
+    .select("id, match_number, round, group_letter, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, winner_side, team1_locked, team2_locked")
     .order("match_number", { ascending: true });
   if (matchErr) throw new Error(matchErr.message);
 

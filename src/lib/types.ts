@@ -63,6 +63,10 @@ export interface Match {
   updated_at: string;
   /** Actual winner, including penalty-shootout outcomes. Null for a group-stage draw. */
   winner_side: WinnerSide | null;
+  /** Admin override locks -- when true, the automatic knockout-slot resolver
+   *  leaves the corresponding team_id untouched. See migration 0013. */
+  team1_locked: boolean;
+  team2_locked: boolean;
 }
 
 export interface Player {

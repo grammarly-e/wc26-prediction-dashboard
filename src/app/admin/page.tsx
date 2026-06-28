@@ -1,6 +1,6 @@
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { getMatches } from "@/lib/data";
+import { getMatches, getTeams } from "@/lib/data";
 import { fetchAllRows } from "@/lib/predictions";
 import AdminLoginForm from "./AdminLoginForm";
 import AdminDashboard, { type ParticipantRow } from "./AdminDashboard";
@@ -44,10 +44,11 @@ export default async function AdminPage() {
     return <AdminLoginForm />;
   }
 
-  const [matches, participants] = await Promise.all([
+  const [matches, participants, teams] = await Promise.all([
     getMatches(),
     getParticipantsWithCounts(),
+    getTeams(),
   ]);
 
-  return <AdminDashboard matches={matches} participants={participants} />;
+  return <AdminDashboard matches={matches} participants={participants} teams={teams} />;
 }

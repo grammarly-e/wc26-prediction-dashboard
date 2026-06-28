@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ROUND_ORDER, groupByRound, isKnockoutRound } from "@/lib/match-utils";
-import type { Match, MatchStatus, WinnerSide } from "@/lib/types";
+import type { Match, MatchStatus, Team, WinnerSide } from "@/lib/types";
 
 const STATUS_OPTIONS: MatchStatus[] = [
   "scheduled",
@@ -69,9 +69,11 @@ interface AddEventState {
 export default function AdminDashboard({
   matches,
   participants: initialParticipants,
+  teams,
 }: {
   matches: Match[];
   participants: ParticipantRow[];
+  teams: Team[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -112,6 +114,14 @@ export default function AdminDashboard({
   // Participant state
   const [participants, setParticipants] = useState(initialParticipants);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Knockout team-slot override state (see migration 0013 + override-match-teams route)
+  const [overrideMatchId, setOverrideMatchId] = useState<string | null>(null);
+  const [overrideState, setOverrideState] = useState<{ team1Id: string; team2Id: string }>({
+    team1Id: "",
+    team2Id: "",
+  });
+  const [savingOverride, setSavingOverride] = useState(false);
 
   // Build round -> match map
   const grouped = groupByRound(matches);
@@ -192,6 +202,68 @@ export default function AdminDashboard({
         alert("Match saved but standings recompute failed:\n" + body.recomputeError);
       }
       setEditingId(null);
+      startTransition(() => router.refresh());
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
+  function toggleOverridePanel(match: Match) {
+    if (overrideMatchId === match.id) {
+      setOverrideMatchId(null);
+      return;
+    }
+    setOverrideMatchId(match.id);
+    setOverrideState({
+      team1Id: match.team1_id ?? "",
+      team2Id: match.team2_id ?? "",
+    });
+  }
+
+  async function saveOverride(match: Match) {
+    setSavingOverride(true);
+    const res = await fetch("/api/admin/override-match-teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        matchId: match.id,
+        team1Id: overrideState.team1Id || null,
+        team2Id: overrideState.team2Id || null,
+        team1Locked: true,
+        team2Locked: true,
+      }),
+    });
+    setSavingOverride(false);
+    if (res.ok) {
+      const body = await res.json() as { recomputeError?: string };
+      if (body.recomputeError) {
+        alert("Override saved but recompute failed:\n" + body.recomputeError);
+      }
+      setOverrideMatchId(null);
+      startTransition(() => router.refresh());
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
+  async function clearOverride(match: Match) {
+    setSavingOverride(true);
+    const res = await fetch("/api/admin/override-match-teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        matchId: match.id,
+        team1Id: match.team1_id,
+        team2Id: match.team2_id,
+        team1Locked: false,
+        team2Locked: false,
+      }),
+    });
+    setSavingOverride(false);
+    if (res.ok) {
+      setOverrideMatchId(null);
       startTransition(() => router.refresh());
     } else {
       const body = await res.json() as { error?: string };
@@ -514,6 +586,23 @@ export default function AdminDashboard({
                           </button>
                         )}
 
+                        {/* Team-slot override toggle (knockout only) */}
+                        {isKnockoutRound(m.round) && (
+                          <button
+                            onClick={() => toggleOverridePanel(m)}
+                            className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+                              overrideMatchId === m.id
+                                ? "bg-pitch text-gold"
+                                : m.team1_locked || m.team2_locked
+                                ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                                : "text-neutral-500 hover:bg-neutral-100"
+                            }`}
+                            title="Manually override which teams occupy this knockout slot"
+                          >
+                            {m.team1_locked || m.team2_locked ? "🔒 Teams" : "Teams"}
+                          </button>
+                        )}
+
                         {/* Edit form or button */}
                         {editingId === m.id ? (
                           <div className="flex flex-wrap items-center gap-2">
@@ -619,6 +708,83 @@ export default function AdminDashboard({
                           </button>
                         )}
                       </div>
+
+                      {/* Team-slot override panel */}
+                      {overrideMatchId === m.id && (
+                        <div className="border-t border-neutral-100 bg-neutral-50 px-4 py-3">
+                          <p className="mb-2 text-xs text-neutral-500">
+                            Manually set the teams in this slot. Locking a side stops the
+                            automatic hourly resolver from overwriting it.
+                          </p>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={overrideState.team1Id}
+                                onChange={(e) =>
+                                  setOverrideState((s) => ({ ...s, team1Id: e.target.value }))
+                                }
+                                className="rounded border border-neutral-200 px-2 py-1 text-xs"
+                              >
+                                <option value="">— unresolved ({m.team1_code}) —</option>
+                                {teams.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {m.team1_locked && (
+                                <span
+                                  className="text-xs text-amber-600"
+                                  title="Locked: auto-resolver won't touch this side"
+                                >
+                                  🔒
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-neutral-400">vs</span>
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={overrideState.team2Id}
+                                onChange={(e) =>
+                                  setOverrideState((s) => ({ ...s, team2Id: e.target.value }))
+                                }
+                                className="rounded border border-neutral-200 px-2 py-1 text-xs"
+                              >
+                                <option value="">— unresolved ({m.team2_code}) —</option>
+                                {teams.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {m.team2_locked && (
+                                <span
+                                  className="text-xs text-amber-600"
+                                  title="Locked: auto-resolver won't touch this side"
+                                >
+                                  🔒
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => saveOverride(m)}
+                              disabled={savingOverride}
+                              className="rounded bg-pitch px-3 py-1 text-xs font-semibold text-gold disabled:opacity-50"
+                            >
+                              {savingOverride ? "..." : "Lock & Save"}
+                            </button>
+                            {(m.team1_locked || m.team2_locked) && (
+                              <button
+                                onClick={() => clearOverride(m)}
+                                disabled={savingOverride}
+                                className="rounded px-3 py-1 text-xs font-semibold text-neutral-500 hover:bg-neutral-100 disabled:opacity-50"
+                              >
+                                Unlock (resume auto)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Events panel */}
                       {eventsMatchId === m.id && (
