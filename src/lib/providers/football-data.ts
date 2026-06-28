@@ -64,10 +64,13 @@ export interface ProviderMatch {
     // knockout fixtures that needed extra periods. See overtime.html docs:
     // https://docs.football-data.org/general/v4/overtime.html
     duration: "REGULAR" | "EXTRA_TIME" | "PENALTY_SHOOTOUT";
-    // "Running total" score — for PENALTY_SHOOTOUT matches this includes the
-    // shootout goals added on top of the 90+ET score (e.g. a 1-1 draw decided
-    // 6-5 on penalties comes back as fullTime 7-6). Use
-    // regulationAndExtraTimeScore() below to strip the shootout back out.
+    // "Running total" score — for EXTRA_TIME matches this already includes
+    // the extra-time goals on top of the 90-minute score; for
+    // PENALTY_SHOOTOUT matches it includes the shootout goals on top of
+    // that (e.g. a 1-1 draw decided 6-5 on penalties after a 2-2 ET comes
+    // back as fullTime 8-7). Use regulationScore() below to strip both back
+    // out and get the 90-minutes-+-stoppage-time score we store and score
+    // predictions against.
     fullTime: { home: number | null; away: number | null };
     halfTime: { home: number | null; away: number | null };
     regularTime?: { home: number | null; away: number | null };
@@ -79,15 +82,44 @@ export interface ProviderMatch {
 }
 
 /**
- * The score after 90 minutes + extra time, deliberately excluding penalty
- * shootout goals — so a knockout match decided on penalties still registers
- * as the draw it was in open play (W/D/L), rather than as a "win" for
- * whoever won the shootout. REGULAR and EXTRA_TIME duration matches are
- * unaffected; fullTime is already the right number for those.
+ * The score at the 90-minutes-+-stoppage-time mark only — deliberately
+ * excluding both extra-time and penalty-shootout goals. Predictions are
+ * scored against this number for every match, knockout included, so a
+ * prediction of e.g. 1-1 still registers as the exact scoreline it
+ * predicted even when the match went on to 2-1 in extra time or was settled
+ * on penalties. winner_side (who actually advances) is derived separately
+ * from score.winner and is unaffected by this — it still reflects the true
+ * result including extra time and penalties, since that's what decides
+ * bracket advancement and the knockout "who wins" prediction pick.
+ *
+ * REGULAR duration: fullTime already is the 90+stoppage score.
+ * EXTRA_TIME / PENALTY_SHOOTOUT: prefer the provider's own regularTime
+ * field (the score it recorded at the 90-minute mark). If the provider
+ * omits regularTime (seen intermittently on the free tier), fall back to
+ * subtracting penalties only — better than nothing, but note this fallback
+ * can still include extra-time goals since there's no way to separate them
+ * from fullTime without regularTime or extraTime present.
  */
-export function regulationAndExtraTimeScore(
+export function regulationScore(
   score: ProviderMatch["score"]
 ): { home: number | null; away: number | null } {
+  if (score.duration === "REGULAR") {
+    return score.fullTime;
+  }
+
+  if (
+    score.regularTime &&
+    score.regularTime.home !== null &&
+    score.regularTime.away !== null
+  ) {
+    return score.regularTime;
+  }
+
+  console.warn(
+    "[regulationScore] provider omitted regularTime for a non-REGULAR-duration match — " +
+      "falling back to fullTime minus penalties only, which may still include extra-time goals."
+  );
+
   if (score.duration !== "PENALTY_SHOOTOUT" || !score.penalties) {
     return score.fullTime;
   }

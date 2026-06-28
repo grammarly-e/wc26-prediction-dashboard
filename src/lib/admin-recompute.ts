@@ -406,12 +406,14 @@ function resolveSlotCode(
 
   // W73/L73-style codes: "winner/loser of match #73". Resolved from
   // winner_side, NOT from comparing home_score/away_score directly — those
-  // columns hold the 90min+ET score with penalty-shootout goals stripped
-  // (regulationAndExtraTimeScore() in providers/football-data.ts), so a
-  // shootout-decided match always shows a tie there. winner_side is
+  // columns hold the 90-minutes-+-stoppage-time score only, with extra-time
+  // and penalty-shootout goals stripped out (regulationScore() in
+  // providers/football-data.ts), so an ET- or shootout-decided match can
+  // show a tie there even though it had a real winner. winner_side is
   // populated independent of that stripping (sync.ts maps the provider's
-  // score.winner, which does account for penalties) and so resolves
-  // correctly regardless of how the match was decided. See migration 0012.
+  // score.winner, which does account for extra time and penalties) and so
+  // resolves correctly regardless of how the match was decided. See
+  // migration 0012.
   const mW = /^W(\d+)$/.exec(code);
   if (mW) {
     const m = matchByNumber.get(Number(mW[1]));

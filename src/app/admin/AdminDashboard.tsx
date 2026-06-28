@@ -38,8 +38,8 @@ interface EditState {
 
 /** Auto-default for the winner toggle: whichever side is ahead on the entered
  *  scoreline. Returns null on a tie or incomplete entry — knockout matches
- *  can't end level, so a tied 90+ET scoreline (decided on penalties) always
- *  needs an explicit manual pick. */
+ *  can't end level, so a tied 90-minutes-+-stoppage-time scoreline (decided
+ *  in extra time or on penalties) always needs an explicit manual pick. */
 function leadingSide(homeStr: string, awayStr: string): WinnerSide | null {
   if (homeStr === "" || awayStr === "") return null;
   const home = parseInt(homeStr, 10);

@@ -13,7 +13,7 @@ import {
   getMatchInsights,
   type MatchInsight,
 } from "@/lib/predictions";
-import { ROUND_ORDER, filterMatches, groupByRound, sortMatchesForDisplay } from "@/lib/match-utils";
+import { DISPLAY_ROUND_ORDER, filterMatches, groupByRound, sortMatchesForDisplay } from "@/lib/match-utils";
 import type { Match } from "@/lib/types";
 
 export const revalidate = 0;
@@ -234,7 +234,7 @@ export default async function MatchesPage({
           <p className="card p-4 text-sm text-neutral-500">No matches found for this filter.</p>
         ) : (() => {
           let firstUpcomingRoundFound = false;
-          return ROUND_ORDER.map((round) => {
+          return DISPLAY_ROUND_ORDER.map((round) => {
             const roundMatches = grouped.get(round) ?? [];
             if (roundMatches.length === 0) return null;
             const roundHasUpcoming = roundMatches.some(

@@ -47,7 +47,7 @@ import {
   groupLetterFromProviderGroup,
   mapStage,
   mapStatus,
-  regulationAndExtraTimeScore,
+  regulationScore,
   type ProviderMatch,
 } from "./providers/football-data";
 import { scoreMatchPrediction, winnerSideFromProvider } from "./scoring";
@@ -210,21 +210,23 @@ async function syncMatches(
     const wasFinished = dbMatch.status === "finished";
     const isNowFinished = newStatus === "finished";
 
-    // For knockout matches decided on penalties, store the 90-min+extra-time
-    // score rather than the provider's fullTime (which has the shootout
-    // goals baked in) -- predictions are scored, and the result displays, as
-    // the W/D/L it actually was after 120 minutes. No-op for matches that
-    // never went to penalties (every group-stage fixture, plus any knockout
-    // match settled in regulation or extra time).
-    const finalScore = regulationAndExtraTimeScore(pm.score);
+    // Store the 90-minutes-+-stoppage-time score for every match, knockout
+    // included -- not the provider's fullTime, which has extra-time and/or
+    // shootout goals baked in. Predictions are scored, and the result
+    // displays, against the scoreline as it stood at 90+stoppage; who
+    // actually advances is tracked separately via winner_side below. No-op
+    // for matches that never went past 90 minutes (every group-stage
+    // fixture, plus any knockout match settled in regulation).
+    const finalScore = regulationScore(pm.score);
     const matchRound = mapStage(pm.stage);
 
-    // Actual winner, including penalty-shootout outcomes -- null for a
-    // group-stage draw. Populated for every match (not just knockout) since
-    // it's free off the provider payload and also feeds the bracket-slot
-    // resolver in admin-recompute.ts, which needs the true winner of matches
-    // decided on penalties (home_score/away_score alone can't tell, since
-    // those columns hold the 90min+ET score -- see regulationAndExtraTimeScore()).
+    // Actual winner, including extra-time and penalty-shootout outcomes --
+    // null for a group-stage draw. Populated for every match (not just
+    // knockout) since it's free off the provider payload and also feeds the
+    // bracket-slot resolver in admin-recompute.ts, which needs the true
+    // winner of matches decided after 90 minutes (home_score/away_score
+    // alone can't tell, since those columns hold the 90+stoppage score only
+    // -- see regulationScore()).
     const winnerSide = winnerSideFromProvider(pm.score.winner);
 
     // Guard against football-data.org's free tier intermittently re-serving an

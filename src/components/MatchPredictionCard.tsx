@@ -22,8 +22,9 @@ import type { Match, MatchPrediction, WinnerSide } from "@/lib/types";
 
 /** Auto-default for the winner toggle: whichever side is ahead on the
  *  entered scoreline. Returns null on a tie or incomplete entry, since
- *  knockout matches can't end level, so a tied 90+ET scoreline (settled on
- *  penalties) always needs an explicit manual pick. */
+ *  knockout matches can't end level, so a tied 90-minutes-+-stoppage-time
+ *  scoreline (settled in extra time or on penalties) always needs an
+ *  explicit manual pick. */
 function leadingSide(homeStr: string, awayStr: string): WinnerSide | null {
   if (homeStr === "" || awayStr === "") return null;
   const home = Number(homeStr);
@@ -259,7 +260,7 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
               className="w-14 rounded-lg border border-neutral-300 px-2 py-1.5 text-center font-mono text-sm focus:border-pitch focus:outline-none"
             />
             {isKnockout && (
-              <span className="text-[11px] text-neutral-400">90 min + ET (no penalties)</span>
+              <span className="text-[11px] text-neutral-400">90 min + stoppage time only</span>
             )}
             <button
               type="submit"

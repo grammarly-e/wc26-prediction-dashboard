@@ -29,6 +29,25 @@ export const ROUND_ORDER: MatchRound[] = [
 ];
 
 /**
+ * Same rounds as ROUND_ORDER, but with the knockout stage listed first.
+ * Once the group stage concludes, group-stage results are historical
+ * reference while the knockout stage is the live, relevant content -- so
+ * the public-facing pages (schedule, predictions, leaderboard, standings)
+ * lead with it. ROUND_ORDER itself stays chronological, since other logic
+ * (groupByRound's Map seeding, admin data entry order) still wants
+ * tournament order rather than display order.
+ */
+export const DISPLAY_ROUND_ORDER: MatchRound[] = [
+  "Round of 32",
+  "Round of 16",
+  "Quarter-final",
+  "Semi-final",
+  "Match for third place",
+  "Final",
+  "Group Stage",
+];
+
+/**
  * Single source of truth for the group/knockout split used by the two
  * independent stage leaderboards (see getStageLeaderboards() in
  * predictions.ts and LeaderboardTable.tsx). Everything that isn't the

@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import { adminTokenHash } from "@/lib/admin-auth";
 import { scoreMatchPrediction } from "@/lib/scoring";
+import { recomputeStandingsAndBracket } from "@/lib/admin-recompute";
 import { isKnockoutRound } from "@/lib/match-utils";
 import type { Database, MatchRound, WinnerSide } from "@/lib/types";
 
@@ -107,9 +108,24 @@ export async function POST() {
     });
   }
 
+  // Standings/bracket are computed entirely from our own matches table (no
+  // external call) -- so whenever this route flips a match to "finished",
+  // recompute immediately rather than waiting for a later sync pass. Mirrors
+  // the same call in update-match and override-match-teams.
+  let recomputeError: string | null = null;
+  if (stale.length > 0) {
+    try {
+      await recomputeStandingsAndBracket(supabase);
+    } catch (err) {
+      recomputeError = err instanceof Error ? err.message : String(err);
+      console.error("[recover-live] recompute failed:", recomputeError);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     staleFound: stale.length,
     results,
+    ...(recomputeError ? { recomputeError } : {}),
   });
 }

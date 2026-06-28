@@ -323,21 +323,7 @@ export default async function StandingsPage() {
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-bold">Group Standings</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Top two in each group (highlighted) advance automatically. The 8 best 3rd-place finishers
-          across all 12 groups also advance. Updates live as matches finish.
-        </p>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {GROUP_LETTERS.map((letter) => (
-          <GroupTable key={letter} letter={letter} rows={byGroup.get(letter) ?? []} />
-        ))}
-      </div>
-
-      <div>
-        <h2 className="text-xl font-bold">Knockout Bracket</h2>
+        <h1 className="text-2xl font-bold">Knockout Bracket</h1>
         <p className="mt-1 text-sm text-neutral-500">
           {allGroupStageFinished
             ? "Teams and scores fill in as each round is played. Scroll horizontally to see the full bracket."
@@ -350,6 +336,20 @@ export default async function StandingsPage() {
         teamNames={teamNames}
         showTBD={!allGroupStageFinished}
       />
+
+      <div>
+        <h2 className="text-xl font-bold">Group Standings</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Top two in each group (highlighted) advanced automatically. The 8 best 3rd-place finishers
+          across all 12 groups also advanced. Kept here for reference.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {GROUP_LETTERS.map((letter) => (
+          <GroupTable key={letter} letter={letter} rows={byGroup.get(letter) ?? []} />
+        ))}
+      </div>
     </div>
   );
 }

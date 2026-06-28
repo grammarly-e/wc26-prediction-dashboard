@@ -348,7 +348,7 @@ export default async function LeaderboardPage() {
         <div>
           <h1 className="text-2xl font-bold">Leaderboard</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Two independent rankings: Group Stage and Knockout Stage. Each is scored separately &mdash; 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Ties within a stage are broken by W/D/L accuracy, then exact scores. Knockout matches decided on penalties are scored on the 90-minute + extra-time result, not the shootout.
+            Two independent rankings: Group Stage and Knockout Stage. Each is scored separately &mdash; 5 pts for exact scoreline, 3 pts for correct goal difference, 2 pts for correct result only. Ties within a stage are broken by W/D/L accuracy, then exact scores. Knockout scorelines are scored on the 90-minute + stoppage-time result only, not extra time or penalties &mdash; the winner pick separately determines who advances.
             Click a row to expand inline, or click a name to see their full prediction sheet.
           </p>
         </div>
@@ -359,16 +359,6 @@ export default async function LeaderboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <StageLeaderCard
-          label="Group stage leader"
-          completedLabel="Group stage winner"
-          description="Most match-prediction points across Matchdays 1-17 (matches #1-72)."
-          completedDescription="Final tally \u2014 group stage is complete."
-          leader={groupLeader}
-          points={groupLeader?.group_stage_points ?? 0}
-          matchesScored={groupMatchesScored}
-          isOver={allGroupStageFinished}
-        />
-        <StageLeaderCard
           label="Knockout stage leader"
           completedLabel="Knockout stage winner"
           description="Most match-prediction points from the Round of 32 through the Final (matches #73-104)."
@@ -378,6 +368,16 @@ export default async function LeaderboardPage() {
           matchesScored={knockoutMatchesScored}
           isOver={tournamentOver}
         />
+        <StageLeaderCard
+          label="Group stage leader"
+          completedLabel="Group stage winner"
+          description="Most match-prediction points across Matchdays 1-17 (matches #1-72)."
+          completedDescription="Final tally \u2014 group stage is complete."
+          leader={groupLeader}
+          points={groupLeader?.group_stage_points ?? 0}
+          matchesScored={groupMatchesScored}
+          isOver={allGroupStageFinished}
+        />
       </div>
 
       {(myGroupRow || myKnockoutRow) && (
@@ -386,19 +386,19 @@ export default async function LeaderboardPage() {
             <p className="text-xs uppercase tracking-wide text-gold/70">Your standing</p>
             <p className="text-lg font-bold">{participant?.display_name}</p>
           </div>
-          {myGroupRow && (
-            <div>
-              <p className="text-xs uppercase tracking-wide text-gold/70">Group stage</p>
-              <p className="text-lg font-bold tabular-nums">
-                {RANK_MEDALS[myGroupIndex + 1] ?? `#${myGroupIndex + 1}`} &middot; {myGroupRow.group_stage_points} pts
-              </p>
-            </div>
-          )}
           {myKnockoutRow && (
             <div>
               <p className="text-xs uppercase tracking-wide text-gold/70">Knockout stage</p>
               <p className="text-lg font-bold tabular-nums">
                 {RANK_MEDALS[myKnockoutIndex + 1] ?? `#${myKnockoutIndex + 1}`} &middot; {myKnockoutRow.knockout_points} pts
+              </p>
+            </div>
+          )}
+          {myGroupRow && (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gold/70">Group stage</p>
+              <p className="text-lg font-bold tabular-nums">
+                {RANK_MEDALS[myGroupIndex + 1] ?? `#${myGroupIndex + 1}`} &middot; {myGroupRow.group_stage_points} pts
               </p>
             </div>
           )}
@@ -419,10 +419,10 @@ export default async function LeaderboardPage() {
       ) : (
         <div className="flex flex-col gap-6">
           <section>
-            <h2 className="mb-3 font-semibold">Group Stage Leaderboard</h2>
+            <h2 className="mb-3 font-semibold">Knockout Stage Leaderboard</h2>
             <LeaderboardTable
-              stage="group"
-              rows={stageLeaderboards.groupStage}
+              stage="knockout"
+              rows={stageLeaderboards.knockout}
               currentParticipantId={participant?.id ?? null}
               breakdowns={breakdowns}
               matches={matchById}
@@ -431,10 +431,10 @@ export default async function LeaderboardPage() {
             />
           </section>
           <section>
-            <h2 className="mb-3 font-semibold">Knockout Stage Leaderboard</h2>
+            <h2 className="mb-3 font-semibold">Group Stage Leaderboard</h2>
             <LeaderboardTable
-              stage="knockout"
-              rows={stageLeaderboards.knockout}
+              stage="group"
+              rows={stageLeaderboards.groupStage}
               currentParticipantId={participant?.id ?? null}
               breakdowns={breakdowns}
               matches={matchById}

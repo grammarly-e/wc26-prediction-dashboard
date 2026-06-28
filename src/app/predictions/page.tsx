@@ -6,7 +6,7 @@ import MatchPredictionCard from "@/components/MatchPredictionCard";
 import ScoreBanner from "@/components/ScoreBanner";
 import { getMatches, getTeamNameMap } from "@/lib/data";
 import { getCurrentParticipant, getMyMatchPredictions } from "@/lib/predictions";
-import { ROUND_ORDER, filterMatches, groupByRound } from "@/lib/match-utils";
+import { DISPLAY_ROUND_ORDER, filterMatches, groupByRound } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
@@ -275,7 +275,7 @@ export default async function PredictionsPage({
 
       <FilterBar activeGroup={filterGroup} activeSearch={filterSearch} />
 
-      {ROUND_ORDER.map((round) => {
+      {DISPLAY_ROUND_ORDER.map((round) => {
         const roundMatches = grouped.get(round) ?? [];
         if (roundMatches.length === 0) return null;
         return (

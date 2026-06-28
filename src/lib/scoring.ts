@@ -15,15 +15,16 @@
 //
 // Knockout matches (supabase/migrations/0012_knockout_winner_predictions.sql):
 // a draw isn't a valid final outcome — the match always produces a winner,
-// possibly via penalties. So for knockout matches, participants make an
-// explicit winner pick (predictedWinnerSide) alongside their scoreline, and
-// Tier 1 is derived from that pick (predictedWinnerSide === actualWinnerSide)
-// instead of from the scoreline's W/D/L direction. Tiers 3 and 2 stay
-// scoreline-only and unchanged — matches.home_score/away_score already store
-// the 90min+extra-time result with shootout goals stripped out (see
-// regulationAndExtraTimeScore() in providers/football-data.ts), so a 1-1
-// prediction against a 1-1 90+ET draw (settled on penalties) still correctly
-// scores on the scoreline tiers regardless of who won the shootout.
+// possibly via extra time or penalties. So for knockout matches, participants
+// make an explicit winner pick (predictedWinnerSide) alongside their
+// scoreline, and Tier 1 is derived from that pick (predictedWinnerSide ===
+// actualWinnerSide) instead of from the scoreline's W/D/L direction. Tiers 3
+// and 2 stay scoreline-only and unchanged — matches.home_score/away_score
+// already store the 90-minutes-+-stoppage-time result only, with extra-time
+// and shootout goals stripped out (see regulationScore() in
+// providers/football-data.ts), so a 1-1 prediction against a match that was
+// 1-1 at 90 (and later settled in extra time or on penalties) still
+// correctly scores on the scoreline tiers regardless of how it was settled.
 // ============================================================================
 
 import type { ScoreBreakdown, WinnerSide } from "./types";
