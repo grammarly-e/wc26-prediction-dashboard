@@ -134,3 +134,19 @@ export function sortMatchesForDisplay(matches: Match[]): Match[] {
     return new Date(a.kickoff_at).getTime() - new Date(b.kickoff_at).getTime();
   });
 }
+
+/**
+ * Has this match's kickoff passed? The single gating check for "is it safe
+ * to reveal someone else's pick for this match" (see
+ * getVisibleMatchPredictionsByParticipant() and getParticipantMatchPredictions()
+ * in predictions.ts, used by the leaderboard breakdown and the participant
+ * prediction-sheet page) as well as "is the prediction form for this match
+ * locked" (see MatchPredictionCard.tsx). Deliberately keyed off kickoff_at
+ * rather than match.status === "scheduled" -- status is written by the sync
+ * job and can lag a few minutes behind the actual kickoff clock, whereas
+ * comparing the timestamp directly matches the bar the DB's RLS policy
+ * (supabase/migrations/0002_*) actually enforces for locking picks.
+ */
+export function hasKickedOff(match: Match): boolean {
+  return new Date(match.kickoff_at).getTime() <= Date.now();
+}

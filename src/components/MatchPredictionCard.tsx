@@ -16,7 +16,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
-import { isKnockoutRound } from "@/lib/match-utils";
+import { hasKickedOff, isKnockoutRound } from "@/lib/match-utils";
 import StatusBadge from "./StatusBadge";
 import type { Match, MatchPrediction, WinnerSide } from "@/lib/types";
 
@@ -88,7 +88,7 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
   const isPlaceholder = !match.team1_id || !match.team2_id;
   const flag1 = flagForTeam(team1);
   const flag2 = flagForTeam(team2);
-  const locked = new Date(match.kickoff_at).getTime() <= Date.now();
+  const locked = hasKickedOff(match);
 
   const countdown = locked ? null : formatCountdown(match.kickoff_at);
 

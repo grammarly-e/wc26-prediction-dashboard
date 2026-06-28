@@ -14,7 +14,8 @@
 
 import { createServerSupabaseClient, createServiceRoleClient } from "./supabase/server";
 import { scoreMatchPrediction } from "./scoring";
-import { correctOutcomeRate, isKnockoutRound } from "./match-utils";
+import { correctOutcomeRate, hasKickedOff, isKnockoutRound } from "./match-utils";
+import { getMatches } from "./data";
 import type {
   LeaderboardRow,
   Match,
@@ -380,7 +381,21 @@ export async function getMatchInsights(): Promise<Map<string, MatchInsight>> {
 // Leaderboard breakdown -- predictions visible to the current viewer
 // ============================================================================
 
-export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<string, MatchPrediction[]>> {
+/**
+ * All match predictions, grouped by participant, with one restriction: a
+ * pick for a match that hasn't kicked off yet is stripped out unless it
+ * belongs to the viewer themselves. "Picks lock the moment a match kicks
+ * off, so everyone's guessing blind" (see /predictions copy) only holds if
+ * this function actually withholds the data -- the caller (leaderboard
+ * page) hands the result straight to LeaderboardTable.tsx, a "use client"
+ * component, so anything returned here gets serialized into the page's RSC
+ * payload and is inspectable in the browser regardless of how the
+ * component chooses to render it. Filtering has to happen here, before that
+ * boundary, not at render time.
+ */
+export async function getVisibleMatchPredictionsByParticipant(
+  viewerParticipantId: string | null
+): Promise<Map<string, MatchPrediction[]>> {
   const supabase = createServerSupabaseClient();
   // Paginated (see fetchAllRows) -- scans every participant's predictions,
   // which crosses the 1000-row default cap well before the tournament ends.
@@ -392,8 +407,15 @@ export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<str
   // reflects current match scores without waiting for the scoring step.
   const enriched = await enrichMatchPredictions(allPredictions, supabase);
 
+  // Kickoff lookup -- a pick is safe to reveal once its match has kicked
+  // off, regardless of who's viewing.
+  const matches = await getMatches();
+  const kickedOffByMatchId = new Map(matches.map((m) => [m.id, hasKickedOff(m)]));
+
   const byParticipant = new Map<string, MatchPrediction[]>();
   for (const row of enriched) {
+    const isOwnPick = viewerParticipantId !== null && row.participant_id === viewerParticipantId;
+    if (!isOwnPick && !kickedOffByMatchId.get(row.match_id)) continue;
     const list = byParticipant.get(row.participant_id) ?? [];
     list.push(row);
     byParticipant.set(row.participant_id, list);
@@ -402,7 +424,18 @@ export async function getVisibleMatchPredictionsByParticipant(): Promise<Map<str
 }
 
 // ============================================================================
-// Public participants view -- ALL predictions visible to everyone
+// Participant prediction-sheet view -- raw rows, unfiltered.
+//
+// Returns every one of this participant's predictions regardless of
+// kickoff. NOT safe to render directly to a viewer who isn't this
+// participant -- the caller (participants/[id]/page.tsx) is responsible for
+// withholding predicted_home/predicted_away/predicted_winner_side for any
+// match that hasn't kicked off yet, unless the viewer is this participant.
+// Filtering happens at render time there rather than here because that page
+// is a plain Server Component with no client component receiving the raw
+// values, so an unrendered pick never reaches the browser -- contrast with
+// getVisibleMatchPredictionsByParticipant() above, which filters at the data
+// layer because its caller hands the result to a "use client" component.
 // ============================================================================
 
 export async function getParticipantMatchPredictions(

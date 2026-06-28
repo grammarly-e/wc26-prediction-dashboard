@@ -262,12 +262,17 @@ const AWARD_CATEGORIES: Array<{ key: string; label: string }> = [
 // \u2500\u2500 Page \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 export default async function LeaderboardPage() {
-  const [participant, lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, topScorers, ...awardPicksArrays] =
+  // getCurrentParticipant() is awaited up front (not inside the Promise.all
+  // below) because getVisibleMatchPredictionsByParticipant() needs the
+  // viewer's id to know whose future-match picks are allowed through the
+  // kickoff gate -- see its doc comment in predictions.ts.
+  const participant = await getCurrentParticipant();
+
+  const [lastSynced, stageLeaderboards, breakdowns, matches, teamNames, allFavPicks, topScorers, ...awardPicksArrays] =
     await Promise.all([
-      getCurrentParticipant(),
       getLastSyncedAt(),
       getStageLeaderboards(),
-      getVisibleMatchPredictionsByParticipant(),
+      getVisibleMatchPredictionsByParticipant(participant?.id ?? null),
       getMatches(),
       getTeamNameMap(),
       getAllFavouritePicks(),

@@ -5,9 +5,10 @@ import { getMatches, getTeamNameMap } from "@/lib/data";
 import {
   getParticipantById,
   getParticipantMatchPredictions,
+  getCurrentParticipant,
   getLeaderboard,
 } from "@/lib/predictions";
-import { ROUND_ORDER, groupByRound, sortMatchesForDisplay, RANK_MEDALS, isKnockoutRound } from "@/lib/match-utils";
+import { ROUND_ORDER, groupByRound, sortMatchesForDisplay, RANK_MEDALS, isKnockoutRound, hasKickedOff } from "@/lib/match-utils";
 import type { Match, MatchPrediction } from "@/lib/types";
 
 export const revalidate = 0;
@@ -56,16 +57,21 @@ export default async function ParticipantPage({
 }: {
   params: { id: string };
 }) {
-  const [participant, predictions, allMatches, teamNames, leaderboard] =
+  const [participant, predictions, allMatches, teamNames, leaderboard, viewer] =
     await Promise.all([
       getParticipantById(params.id),
       getParticipantMatchPredictions(params.id),
       getMatches(),
       getTeamNameMap(),
       getLeaderboard(),
+      getCurrentParticipant(),
     ]);
 
   if (!participant) notFound();
+
+  // Your own picks are always yours to see -- the kickoff gate below only
+  // applies when you're looking at someone else's sheet.
+  const isOwnProfile = viewer?.id === params.id;
 
   // Build lookup maps
   const matchById = new Map<string, Match>(allMatches.map((m) => [m.id, m]));
@@ -163,12 +169,17 @@ export default async function ParticipantPage({
                   const hasResult =
                     match.home_score !== null && match.away_score !== null;
                   const tier = pick ? pickTier(pick) : "pending";
+                  // Someone else's pick for a match that hasn't kicked off
+                  // yet stays hidden -- "everyone's guessing blind" (see
+                  // /predictions copy) only holds if this page doesn't leak
+                  // the scoreline early. Your own picks are exempt.
+                  const revealed = isOwnProfile || hasKickedOff(match);
 
                   return (
                     <div
                       key={match.id}
                       className={`rounded-xl border px-3 py-2.5 text-xs shadow-sm ${pick ? TIER_CLASS[tier] : "border-neutral-100 bg-neutral-50 opacity-60"}`}
-                      title={pick ? tierLabel(tier, isKnockoutRound(match.round)) : "No prediction submitted"}
+                      title={pick ? (revealed ? tierLabel(tier, isKnockoutRound(match.round)) : "Picked -- hidden until kickoff") : "No prediction submitted"}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2 text-neutral-400">
                         <span>#{match.match_number}</span>
@@ -181,7 +192,9 @@ export default async function ParticipantPage({
                           {flag1 && `${flag1} `}{team1} vs {flag2 && `${flag2} `}{team2}
                         </span>
                         <div className="flex shrink-0 flex-col items-end gap-0.5">
-                          {pick ? (
+                          {pick && !revealed ? (
+                            <span className="badge bg-neutral-100 text-neutral-400">🔒 hidden</span>
+                          ) : pick ? (
                             <>
                               <span className="font-mono font-semibold tabular-nums text-neutral-900">
                                 {pick.predicted_home}–{pick.predicted_away}
