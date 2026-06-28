@@ -367,7 +367,7 @@ export default async function LeaderboardPage() {
           label="Knockout stage leader"
           completedLabel="Knockout stage winner"
           description="Most match-prediction points from the Round of 32 through the Final (matches #73-104)."
-          completedDescription="Final tally \u2014 tournament is complete."
+          completedDescription={"Final tally \u2014 tournament is complete."}
           leader={knockoutLeader}
           points={knockoutLeader?.knockout_points ?? 0}
           matchesScored={knockoutMatchesScored}
@@ -377,7 +377,7 @@ export default async function LeaderboardPage() {
           label="Group stage leader"
           completedLabel="Group stage winner"
           description="Most match-prediction points across Matchdays 1-17 (matches #1-72)."
-          completedDescription="Final tally \u2014 group stage is complete."
+          completedDescription={"Final tally \u2014 group stage is complete."}
           leader={groupLeader}
           points={groupLeader?.group_stage_points ?? 0}
           matchesScored={groupMatchesScored}
