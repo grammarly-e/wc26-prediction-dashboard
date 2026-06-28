@@ -483,19 +483,40 @@ async function resolveKnockoutSlots(
       ? null
       : resolveSlotCode(m.team2_code, groupWinners, groupRunnersUp, allThirds, assignedThirds, matchByNumber);
 
-    const t1Final = m.team1_locked ? m.team1_id : (newT1 ?? m.team1_id);
-    const t2Final = m.team2_locked ? m.team2_id : (newT2 ?? m.team2_id);
-    const changed = t1Final !== m.team1_id || t2Final !== m.team2_id;
+    if (newT1 === null && newT2 === null) continue;
 
-    if (changed) {
+    const nowIso = new Date().toISOString();
+    let finalT1 = m.team1_id;
+    let finalT2 = m.team2_id;
+    let wroteAny = false;
+
+    // Each side is written in its own statement, gated on team{1,2}_locked
+    // still being false *at write time* via .eq(...) -- not just at the read
+    // captured in `matches` at the top of this recompute pass. Without this,
+    // an admin's override-match-teams lock landing in the gap between this
+    // function's read and this loop's write would be silently overwritten by
+    // a stale in-memory snapshot that still thought the side was unlocked.
+    // Gating the UPDATE itself on the live DB value closes that race.
+    if (newT1 !== null && newT1 !== m.team1_id) {
       const { error } = await supabase
         .from("matches")
-        .update({ team1_id: t1Final, team2_id: t2Final, updated_at: new Date().toISOString() })
-        .eq("id", m.id);
-      if (!error) {
-        matchByNumber.set(m.match_number, { ...m, team1_id: t1Final, team2_id: t2Final });
-        updated++;
-      }
+        .update({ team1_id: newT1, updated_at: nowIso })
+        .eq("id", m.id)
+        .eq("team1_locked", false);
+      if (!error) { finalT1 = newT1; wroteAny = true; }
+    }
+    if (newT2 !== null && newT2 !== m.team2_id) {
+      const { error } = await supabase
+        .from("matches")
+        .update({ team2_id: newT2, updated_at: nowIso })
+        .eq("id", m.id)
+        .eq("team2_locked", false);
+      if (!error) { finalT2 = newT2; wroteAny = true; }
+    }
+
+    if (wroteAny) {
+      matchByNumber.set(m.match_number, { ...m, team1_id: finalT1, team2_id: finalT2 });
+      updated++;
     }
   }
   return updated;

@@ -256,10 +256,22 @@ async function syncMatches(
     const providerGroupLetter = groupLetterFromProviderGroup(pm.group);
     const updatePayload: Record<string, unknown> = {
       external_id: String(pm.id),
-      team1_id: team1Id,
-      team2_id: team2Id,
       round: matchRound,
     };
+    // Only write team1_id/team2_id when actually newly resolving a slot
+    // (i.e. the DB's existing value was null). Never re-write an already-set
+    // team_id with the snapshot captured at the top of this function --
+    // dbMatches was read once before this loop started, and this loop awaits
+    // a DB round trip per fixture, so it can run for several seconds across
+    // many matches. If an admin locks a knockout slot (override-match-teams)
+    // in that window, re-writing the stale pre-lock value here would clobber
+    // the lock the instant it was set -- this is what caused a freshly
+    // locked Iran -> Senegal override to "revert instantly". team_ids that
+    // are already non-null (resolved earlier by resolveKnockoutSlots, or
+    // pinned by an admin override) are left untouched regardless of lock
+    // state -- sync's job is to fill gaps, not refresh existing links.
+    if (dbMatch.team1_id === null && team1Id) updatePayload.team1_id = team1Id;
+    if (dbMatch.team2_id === null && team2Id) updatePayload.team2_id = team2Id;
     if (shouldUpdateResult) {
       updatePayload.home_score = finalScore.home;
       updatePayload.away_score = finalScore.away;
