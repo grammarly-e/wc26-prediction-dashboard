@@ -149,16 +149,16 @@ function BracketSlot({
   );
 }
 
-// Bracket layout (left side, top to bottom):
-//   R32 pairs → R16:  [73,75]→90  [74,77]→89  [76,78]→91  [79,80]→92
-//   R16 pairs → QF:   [90,89]→97  [91,92]→99
-//   QF pair → SF:     [97,99]→101
-//   SF left: 101 (W97 v W98)  — note W98 comes from right QF (cross-bracket SF)
+// Bracket layout (left side, top to bottom) -- feeds SF 101:
+//   R32 pairs → R16:  [73,75]→90  [74,77]→89  [83,84]→93  [81,82]→94
+//   R16 pairs → QF:   [90,89]→97  [93,94]→98
+//   QF pair → SF:     [97,98]→101
+//   SF left: 101 (W97 v W98)
 //
-// Right side (mirrored):
-//   R32 pairs → R16:  [83,84]→93  [81,82]→94  [86,88]→95  [85,87]→96
-//   R16 pairs → QF:   [93,94]→98  [95,96]→100
-//   QF pair → SF:     [98,100]→102
+// Right side (mirrored) -- feeds SF 102:
+//   R32 pairs → R16:  [76,78]→91  [79,80]→92  [86,88]→95  [85,87]→96
+//   R16 pairs → QF:   [91,92]→99  [95,96]→100
+//   QF pair → SF:     [99,100]→102
 //   SF right: 102 (W99 v W100)
 //
 // Center: Final #104 (W101 v W102), 3rd place #103 (L101 v L102)
@@ -252,14 +252,14 @@ function KnockoutBracket({
   const byNum = new Map<number, Match>(matches.map((m) => [m.match_number, m]));
 
   // Left half (R32 reordered so adjacent pairs feed the same R16 slot)
-  const leftR32 = [73, 75, 74, 77, 76, 78, 79, 80];
-  const leftR16 = [90, 89, 91, 92];
-  const leftQF  = [97, 99];
+  const leftR32 = [73, 75, 74, 77, 83, 84, 81, 82];
+  const leftR16 = [90, 89, 93, 94];
+  const leftQF  = [97, 98];
 
   // Right half (mirrored order)
-  const rightQF  = [98, 100];
-  const rightR16 = [93, 94, 95, 96];
-  const rightR32 = [83, 84, 81, 82, 86, 88, 85, 87];
+  const rightQF  = [99, 100];
+  const rightR16 = [91, 92, 95, 96];
+  const rightR32 = [76, 78, 79, 80, 86, 88, 85, 87];
 
   return (
     <div className="overflow-x-auto pb-2">
