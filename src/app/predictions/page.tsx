@@ -243,27 +243,33 @@ export default async function PredictionsPage({
         <p className="mb-3 text-sm font-semibold">How scoring works</p>
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="rounded-lg border border-emerald-400 bg-emerald-50 px-3 py-2 text-sm">
-            <div className="font-semibold text-emerald-700">Perfect call</div>
-            <div className="text-neutral-600">You named the exact final scoreline.</div>
+            <div className="font-semibold text-emerald-700">Bullseye</div>
+            <div className="text-neutral-600">
+              Exact RT score (and the correct advancing team if it was a draw).
+            </div>
             <div className="mt-0.5 font-bold text-emerald-700">5 pts</div>
           </div>
           <div className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm">
-            <div className="font-semibold text-blue-700">Sharp eye</div>
-            <div className="text-neutral-600">Right result and correct goal margin.</div>
+            <div className="font-semibold text-blue-700">Close Call</div>
+            <div className="text-neutral-600">
+              Correct RT goal margin for a win/loss, or a correct RT draw with the correct advancing team (wrong scoreline).
+            </div>
             <div className="mt-0.5 font-bold text-blue-700">3 pts</div>
           </div>
           <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm">
-            <div className="font-semibold text-yellow-700">Called it</div>
-            <div className="text-neutral-600">Right W/D/L outcome, wrong margin.</div>
+            <div className="font-semibold text-yellow-700">Base Win</div>
+            <div className="text-neutral-600">Correct RT winner, but wrong margin.</div>
             <div className="mt-0.5 font-bold text-yellow-700">2 pts</div>
           </div>
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm">
             <div className="font-semibold text-red-500">Missed</div>
-            <div className="text-neutral-500">Wrong result entirely.</div>
+            <div className="text-neutral-500">Wrong RT result, or the wrong advancing team on a draw.</div>
             <div className="mt-0.5 font-bold text-red-400">0 pts</div>
           </div>
         </div>
-        <p className="mt-2 text-xs text-neutral-400">Tiers do not stack — you score the single highest tier you qualify for.</p>
+        <p className="mt-2 text-xs text-neutral-400">
+          RT = the result after 90 minutes plus stoppage time, before extra time or penalties. &ldquo;Advancing team&rdquo; only applies to knockout matches, which can&rsquo;t end in a draw. Tiers don&rsquo;t stack: you score the single highest tier you qualify for.
+        </p>
       </div>
 
       <TodaysMatches

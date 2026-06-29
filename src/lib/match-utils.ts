@@ -136,17 +136,43 @@ export function sortMatchesForDisplay(matches: Match[]): Match[] {
 }
 
 /**
- * Has this match's kickoff passed? The single gating check for "is it safe
- * to reveal someone else's pick for this match" (see
+ * Has this match's kickoff passed? The gating check for "is it safe to
+ * reveal someone else's pick for this match" (see
  * getVisibleMatchPredictionsByParticipant() and getParticipantMatchPredictions()
  * in predictions.ts, used by the leaderboard breakdown and the participant
- * prediction-sheet page) as well as "is the prediction form for this match
- * locked" (see MatchPredictionCard.tsx). Deliberately keyed off kickoff_at
- * rather than match.status === "scheduled" -- status is written by the sync
- * job and can lag a few minutes behind the actual kickoff clock, whereas
- * comparing the timestamp directly matches the bar the DB's RLS policy
- * (supabase/migrations/0002_*) actually enforces for locking picks.
+ * prediction-sheet page). Deliberately keyed off kickoff_at rather than
+ * match.status === "scheduled" -- status is written by the sync job and can
+ * lag a few minutes behind the actual kickoff clock.
+ *
+ * NOT used for the prediction-form lock anymore -- that moved to
+ * isLockedForPicks() below, which fires PICK_LOCK_LEAD_MINUTES earlier. This
+ * one stays at the literal kickoff whistle.
  */
 export function hasKickedOff(match: Match): boolean {
   return new Date(match.kickoff_at).getTime() <= Date.now();
+}
+
+/**
+ * Minutes before kickoff that match-prediction submissions lock and the
+ * home/draw/away pick-percentage breakdown becomes visible. The two move
+ * together on purpose: once nobody can change their pick anymore, showing
+ * the aggregate split can't influence anyone's own pick, so it's safe to
+ * reveal at that same instant. See isLockedForPicks() below,
+ * MatchPredictionCard.tsx (submission lock), MatchCard.tsx (percentage
+ * reveal), and supabase/migrations/0015_* (the DB-side write-lock RLS this
+ * mirrors). Distinct from hasKickedOff() above, which still gates "reveal
+ * another participant's individual pick" at the literal kickoff whistle --
+ * that one wasn't asked to move.
+ */
+export const PICK_LOCK_LEAD_MINUTES = 15;
+
+/** Timestamp (ms since epoch) at which this match's picks lock -- kickoff
+ *  minus PICK_LOCK_LEAD_MINUTES. */
+export function pickLockTime(match: Match): number {
+  return new Date(match.kickoff_at).getTime() - PICK_LOCK_LEAD_MINUTES * 60_000;
+}
+
+/** Has this match passed its prediction-lock cutoff? See PICK_LOCK_LEAD_MINUTES. */
+export function isLockedForPicks(match: Match): boolean {
+  return Date.now() >= pickLockTime(match);
 }

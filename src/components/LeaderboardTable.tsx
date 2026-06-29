@@ -77,10 +77,10 @@ const PICK_RESULT_CLASSES: Record<PickResult, string> = {
 };
 
 const PICK_RESULT_LABELS: Record<PickResult, string> = {
-  exact_score: "🎯 Perfect call — exact scoreline (5 pts)",
-  goal_diff:   "Sharp eye — right result + goal margin (3 pts)",
-  outcome:     "Called it — right result W/D/L (2 pts)",
-  wrong:       "Missed this one (0 pts)",
+  exact_score: "🎯 Bullseye: exact RT score (5 pts)",
+  goal_diff:   "Close Call: correct RT goal margin (3 pts)",
+  outcome:     "Base Win: correct RT winner, wrong margin (2 pts)",
+  wrong:       "Missed: wrong RT result, or wrong advancing team on a draw (0 pts)",
   pending:     "Awaiting kickoff",
 };
 

@@ -3,12 +3,12 @@
 // ============================================================================
 // One match, with an editable scoreline prediction.
 //
-// Locking rule mirrors the database (supabase/migrations/0002_*): once
-// `kickoff_at` passes, this flips from an editable form to a read-only
-// summary of what was submitted (or a "you missed this one" note) — backed
-// up server-side by RLS, which refuses writes after kickoff regardless of
-// what the UI does. The UI lock is just for a clean experience; the DB lock
-// is what actually matters.
+// Locking rule mirrors the database (supabase/migrations/0015_*): once a
+// match is within PICK_LOCK_LEAD_MINUTES of kickoff, this flips from an
+// editable form to a read-only summary of what was submitted (or a "you
+// missed this one" note) — backed up server-side by RLS, which refuses
+// writes past that same cutoff regardless of what the UI does. The UI lock
+// is just for a clean experience; the DB lock is what actually matters.
 // ============================================================================
 
 import { useState, type FormEvent } from "react";
@@ -16,7 +16,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { flagForTeam } from "@/lib/flags";
 import { SCORING } from "@/lib/scoring";
-import { hasKickedOff, isKnockoutRound } from "@/lib/match-utils";
+import { isKnockoutRound, isLockedForPicks, pickLockTime } from "@/lib/match-utils";
 import StatusBadge from "./StatusBadge";
 import type { Match, MatchPrediction, WinnerSide } from "@/lib/types";
 
@@ -88,9 +88,9 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
   const isPlaceholder = !match.team1_id || !match.team2_id;
   const flag1 = flagForTeam(team1);
   const flag2 = flagForTeam(team2);
-  const locked = hasKickedOff(match);
+  const locked = isLockedForPicks(match);
 
-  const countdown = locked ? null : formatCountdown(match.kickoff_at);
+  const countdown = locked ? null : formatCountdown(new Date(pickLockTime(match)).toISOString());
 
   const [home, setHome] = useState(existing ? String(existing.predicted_home) : "");
   const [away, setAway] = useState(existing ? String(existing.predicted_away) : "");
@@ -147,7 +147,7 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
       setStatus("error");
       setError(
         upsertError.code === "42501"
-          ? "This match has already kicked off — picks are locked."
+          ? "Picks lock 15 minutes before kickoff — that window has passed."
           : "Couldn't save your prediction. Try again."
       );
       return;
@@ -278,10 +278,11 @@ export default function MatchPredictionCard({ match, teamNames, participantId, e
 }
 
 /**
- * Read-only view shown once a match has kicked off — picks can no longer
- * change. Always shows the final score once it's known (mirrors MatchCard),
- * even if you never submitted a pick — "what happened" is information you
- * want regardless of whether you played.
+ * Read-only view shown once a match's picks have locked (kickoff minus
+ * PICK_LOCK_LEAD_MINUTES) — picks can no longer change. Always shows the
+ * final score once it's known (mirrors MatchCard), even if you never
+ * submitted a pick — "what happened" is information you want regardless of
+ * whether you played.
  */
 function LockedSummary({ match, existing }: { match: Match; existing: MatchPrediction | null }) {
   const hasResult = match.home_score !== null && match.away_score !== null;
@@ -297,7 +298,7 @@ function LockedSummary({ match, existing }: { match: Match; existing: MatchPredi
     return (
       <div className="flex items-center justify-between rounded-lg bg-neutral-50 px-3 py-2 text-xs">
         <span className="text-neutral-500">
-          You didn&rsquo;t lock in a pick before kickoff. Final: {finalScore}
+          You didn&rsquo;t lock in a pick before picks closed. Final: {finalScore}
         </span>
         <span className="badge bg-neutral-100 text-neutral-400">no pick</span>
       </div>

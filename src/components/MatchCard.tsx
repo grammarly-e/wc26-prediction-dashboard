@@ -1,6 +1,6 @@
 import StatusBadge from "./StatusBadge";
 import { flagForTeam } from "@/lib/flags";
-import { isKnockoutRound } from "@/lib/match-utils";
+import { isKnockoutRound, isLockedForPicks } from "@/lib/match-utils";
 import type { Match, MatchEvent } from "@/lib/types";
 import type { ConsensusData } from "@/lib/data";
 import type { MatchInsight, MatchPredictionReveal } from "@/lib/predictions";
@@ -128,8 +128,12 @@ export default function MatchCard({
         </div>
       )}
 
-      {/* Pre-kickoff consensus summary (scheduled matches only) */}
-      {match.status === "scheduled" && consensus && consensus.total > 0 && (
+      {/* Pre-kickoff consensus summary (scheduled matches only). Gated by
+          isLockedForPicks() rather than raw kickoff: picks are still
+          editable up until 15 minutes before kickoff, so revealing the
+          split any earlier could nudge a fence-sitter's own pick. Once
+          picks lock, nobody can act on the reveal anymore, so it's safe. */}
+      {match.status === "scheduled" && isLockedForPicks(match) && consensus && consensus.total > 0 && (
         <div className="border-t border-neutral-100 pt-2 text-xs text-neutral-500">
           <span className="font-medium text-neutral-700">{consensus.total} {consensus.total === 1 ? "pick" : "picks"}</span>
           {" — "}

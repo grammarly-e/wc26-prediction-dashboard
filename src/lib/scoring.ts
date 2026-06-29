@@ -17,14 +17,26 @@
 // a draw isn't a valid final outcome — the match always produces a winner,
 // possibly via extra time or penalties. So for knockout matches, participants
 // make an explicit winner pick (predictedWinnerSide) alongside their
-// scoreline, and Tier 1 is derived from that pick (predictedWinnerSide ===
-// actualWinnerSide) instead of from the scoreline's W/D/L direction. Tiers 3
-// and 2 stay scoreline-only and unchanged — matches.home_score/away_score
-// already store the 90-minutes-+-stoppage-time result only, with extra-time
-// and shootout goals stripped out (see regulationScore() in
-// providers/football-data.ts), so a 1-1 prediction against a match that was
-// 1-1 at 90 (and later settled in extra time or on penalties) still
-// correctly scores on the scoreline tiers regardless of how it was settled.
+// scoreline. matches.home_score/away_score already store the
+// 90-minutes-+-stoppage-time result only, with extra-time and shootout goals
+// stripped out (see regulationScore() in providers/football-data.ts).
+//
+// One gate sits above all three tiers for knockout matches: if the actual
+// 90-minute score was itself level (actualHome === actualAway, i.e. extra
+// time/penalties decided it) and the winner pick is missing or wrong, EVERY
+// tier caps at 0 for that match — including an exact draw scoreline.
+// "Correctly called a draw at 90" and "correctly called who advances" are
+// two different claims; nailing only the first one isn't a real win, so
+// there's no partial credit (knockoutDrawAdvancingTeamWrong below).
+//
+// This gate only ever fires when isKnockout is true AND the actual match was
+// genuinely level at 90 — it has no effect on group-stage matches (no
+// winner pick exists) or on any knockout match decided in normal time
+// (decisive actual result), regardless of what was predicted. A wrong
+// scoreline W/D/L direction is therefore still always 0 on its own merits:
+// predicted a decisive win but the match was level at 90, or predicted a
+// draw but the match was decided in normal time — sameOutcome alone already
+// fails in both cases, with or without this gate.
 // ============================================================================
 
 import type { ScoreBreakdown, WinnerSide } from "./types";
@@ -48,7 +60,8 @@ export interface MatchScoreInput {
   predictedAway: number;
   actualHome: number;
   actualAway: number;
-  /** Set for knockout-round matches — switches Tier 1 to winner-pick scoring. */
+  /** Set for knockout-round matches — enables the level-at-90 advancing-team
+   *  gate (knockoutDrawAdvancingTeamWrong) on every scoring tier. */
   isKnockout?: boolean;
   predictedWinnerSide?: WinnerSide | null;
   actualWinnerSide?: WinnerSide | null;
@@ -68,19 +81,23 @@ export interface MatchScoreResult {
 export function scoreMatchPrediction(input: MatchScoreInput): MatchScoreResult {
   const { predictedHome, predictedAway, actualHome, actualAway, isKnockout, predictedWinnerSide, actualWinnerSide } = input;
 
-  const exactScore = predictedHome === actualHome && predictedAway === actualAway;
   const sameOutcome = outcomeOf(predictedHome, predictedAway) === outcomeOf(actualHome, actualAway);
+
+  // See module header: for knockout matches that were level at 90, a wrong
+  // (or missing) advancing-team pick caps every tier below at 0 — even an
+  // exact draw scoreline. `isKnockout &&` short-circuits this to false for
+  // every group-stage match; `actualHome === actualAway` short-circuits it
+  // to false for any knockout match decided in normal time.
+  const knockoutDrawAdvancingTeamWrong =
+    !!isKnockout &&
+    actualHome === actualAway &&
+    !(predictedWinnerSide != null && predictedWinnerSide === actualWinnerSide);
+
+  const exactScore = !knockoutDrawAdvancingTeamWrong && predictedHome === actualHome && predictedAway === actualAway;
   // Only flag goal diff as correct when outcome is also correct — a flipped
   // result with the same margin (e.g. 2-1 predicted, 1-2 actual) scores 0 pts.
-  // Scoreline-only and intentionally unaffected by isKnockout/winner pick —
-  // see module header.
-  const sameGoalDiff = sameOutcome && (predictedHome - predictedAway === actualHome - actualAway);
-
-  // Tier 1: knockout matches use the explicit winner pick (no draw possible
-  // in the final outcome); group stage keeps the scoreline-derived W/D/L.
-  const correctOutcome = isKnockout
-    ? predictedWinnerSide != null && predictedWinnerSide === actualWinnerSide
-    : sameOutcome;
+  const sameGoalDiff = !knockoutDrawAdvancingTeamWrong && sameOutcome && (predictedHome - predictedAway === actualHome - actualAway);
+  const correctOutcome = !knockoutDrawAdvancingTeamWrong && sameOutcome;
 
   let points = 0;
   const breakdown: ScoreBreakdown = {
