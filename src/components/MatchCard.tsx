@@ -58,6 +58,16 @@ export default function MatchCard({
   const flag2 = forceNamesTBD ? null : flagForTeam(team2);
 
   const isFinished = match.status === "finished";
+  const isKnockout = isKnockoutRound(match.round);
+  // home_score/away_score hold the 90+stoppage scoreline only -- a knockout
+  // match settled in extra time or on penalties still shows as a draw there.
+  // winner_side carries the actual result separately (see sync.ts's
+  // regulationScore()/winnerSideFromProvider()), so it's the only reliable
+  // way to tell who actually won/advanced once the 90-minute score is level.
+  const isDrawScoreline = hasScore && match.home_score === match.away_score;
+  const winnerIsTeam1 = isKnockout && isFinished && match.winner_side === "team1";
+  const winnerIsTeam2 = isKnockout && isFinished && match.winner_side === "team2";
+  const decidedAfterDraw = isKnockout && isFinished && isDrawScoreline && match.winner_side !== null;
 
   // Show consensus prediction bars on finished matches with enough data
   const showReveal = isFinished && hasScore && consensus && consensus.total >= 3;
@@ -102,18 +112,46 @@ export default function MatchCard({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <span className={`flex flex-1 items-center justify-end gap-2 text-right font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>
+        <span
+          className={`flex flex-1 items-center justify-end gap-2 text-right font-medium ${
+            isPlaceholder
+              ? "text-neutral-400 italic"
+              : winnerIsTeam2
+              ? "text-neutral-400"
+              : winnerIsTeam1
+              ? "font-bold text-pitch"
+              : ""
+          }`}
+        >
           {team1}
           {flag1 && <span aria-hidden="true">{flag1}</span>}
         </span>
         <span className="min-w-[64px] rounded-lg bg-neutral-100 px-3 py-1 text-center font-mono text-lg font-bold tabular-nums">
           {hasScore ? `${match.home_score} – ${match.away_score}` : "vs"}
         </span>
-        <span className={`flex flex-1 items-center gap-2 font-medium ${isPlaceholder ? "text-neutral-400 italic" : ""}`}>
+        <span
+          className={`flex flex-1 items-center gap-2 font-medium ${
+            isPlaceholder
+              ? "text-neutral-400 italic"
+              : winnerIsTeam1
+              ? "text-neutral-400"
+              : winnerIsTeam2
+              ? "font-bold text-pitch"
+              : ""
+          }`}
+        >
           {flag2 && <span aria-hidden="true">{flag2}</span>}
           {team2}
         </span>
       </div>
+
+      {/* Knockout match decided after a 90-minute draw -- the scoreline above
+          only shows the regulation result, so spell out who actually won. */}
+      {decidedAfterDraw && (
+        <div className="-mt-1 text-center text-xs font-semibold text-pitch">
+          {match.winner_side === "team1" ? team1 : team2} won in extra time / on penalties
+        </div>
+      )}
 
       <div className="flex items-center justify-between text-xs text-neutral-500">
         <span>{formatKickoff(match.kickoff_at)}</span>

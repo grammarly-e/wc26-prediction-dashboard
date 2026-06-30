@@ -101,9 +101,16 @@ function BracketSlot({
   const finished = match.status === "finished";
   const live = match.status === "live";
 
-  // Winner bolded, loser dimmed
-  const isWinner1 = finished && hasScore && match.home_score! > match.away_score!;
-  const isWinner2 = finished && hasScore && match.away_score! > match.home_score!;
+  // Winner bolded, loser dimmed. Determined from winner_side -- the actual
+  // result including extra-time/penalty-shootout outcomes -- never from
+  // comparing home_score/away_score directly: those columns hold the
+  // 90+stoppage scoreline only, which reads as a tie for any knockout match
+  // settled after 90 minutes even though there's a real winner.
+  const isWinner1 = finished && match.winner_side === "team1";
+  const isWinner2 = finished && match.winner_side === "team2";
+  // 90-minute scoreline was level but the match still had a winner.
+  const decidedAfterDraw =
+    finished && hasScore && match.home_score === match.away_score && match.winner_side !== null;
 
   const topIsTeam1 = side === "left";
   const topTeam = topIsTeam1 ? t1 : t2;
@@ -136,14 +143,38 @@ function BracketSlot({
           {topFlag && <span>{topFlag}</span>}
           <span className="truncate">{topTeam}</span>
         </span>
-        {hasScore && <span className="shrink-0 font-mono tabular-nums">{topScore}</span>}
+        {hasScore && (
+          <span className="shrink-0 font-mono tabular-nums">
+            {topScore}
+            {decidedAfterDraw && topWins && (
+              <sup
+                className="ml-0.5 font-sans text-[8px] font-bold not-italic"
+                title="Won in extra time / on penalties"
+              >
+                p
+              </sup>
+            )}
+          </span>
+        )}
       </div>
       <div className={botClass}>
         <span className="flex min-w-0 items-center gap-1">
           {botFlag && <span>{botFlag}</span>}
           <span className="truncate">{botTeam}</span>
         </span>
-        {hasScore && <span className="shrink-0 font-mono tabular-nums">{botScore}</span>}
+        {hasScore && (
+          <span className="shrink-0 font-mono tabular-nums">
+            {botScore}
+            {decidedAfterDraw && botWins && (
+              <sup
+                className="ml-0.5 font-sans text-[8px] font-bold not-italic"
+                title="Won in extra time / on penalties"
+              >
+                p
+              </sup>
+            )}
+          </span>
+        )}
       </div>
     </div>
   );
