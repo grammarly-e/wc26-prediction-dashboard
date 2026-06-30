@@ -186,7 +186,7 @@ async function syncMatches(
 
   const { data: dbMatches, error: matchesErr } = await supabase
     .from("matches")
-    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, external_id");
+    .select("id, match_number, kickoff_at, team1_code, team2_code, team1_id, team2_id, home_score, away_score, status, external_id, winner_side");
   if (matchesErr) throw matchesErr;
 
   const newlyFinished: DbMatchRow[] = [];
@@ -227,7 +227,18 @@ async function syncMatches(
     // winner of matches decided after 90 minutes (home_score/away_score
     // alone can't tell, since those columns hold the 90+stoppage score only
     // -- see regulationScore()).
-    const winnerSide = winnerSideFromProvider(pm.score.winner);
+    //
+    // football-data.org's free tier only tracks the regulation-time outcome
+    // in `score.winner` -- for a knockout match settled in extra time or on
+    // penalties it keeps reporting "DRAW" (-> null here) forever, even long
+    // after the shootout result is public. Falling back to the existing DB
+    // value when the provider has no winner protects two things from being
+    // silently erased on every subsequent hourly sync: a winner_side an
+    // earlier sync call already captured, and a manual pick the admin made
+    // via the admin panel for exactly this provider gap. The provider still
+    // wins whenever it *does* report a real winner.
+    const providerWinnerSide = winnerSideFromProvider(pm.score.winner);
+    const winnerSide = providerWinnerSide ?? dbMatch.winner_side ?? null;
 
     // Guard against football-data.org's free tier intermittently re-serving an
     // already-finished match as not-finished, or finished with a null score
