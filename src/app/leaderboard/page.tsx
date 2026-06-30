@@ -404,6 +404,8 @@ export default async function LeaderboardPage() {
         </span>
       </div>
 
+      {anyKnockoutPlayed && <FavouritesLeaderboard rows={favLeaderRows} tournamentOver={tournamentOver} />}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <StageLeaderCard
           label="Knockout stage leader"
@@ -491,8 +493,6 @@ export default async function LeaderboardPage() {
           </section>
         </div>
       )}
-
-      {anyKnockoutPlayed && <FavouritesLeaderboard rows={favLeaderRows} tournamentOver={tournamentOver} />}
 
       <section>
         <div className="mb-3">
