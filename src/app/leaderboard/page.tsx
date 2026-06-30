@@ -37,17 +37,49 @@ const ROUND_PTS: Record<string, number> = {
 function teamFurthestPts(teamId: string, matches: Match[]): number {
   let pts = 0;
   for (const m of matches) {
-    if (m.status !== "finished") continue;
     if (m.team1_id !== teamId && m.team2_id !== teamId) continue;
-    if (m.round === "Final" && m.home_score != null && m.away_score != null) {
+    if (m.round === "Final") {
+      if (m.status !== "finished" || m.home_score == null || m.away_score == null) continue;
       const isTeam1 = m.team1_id === teamId;
       const won = isTeam1 ? m.home_score > m.away_score : m.away_score > m.home_score;
       pts = Math.max(pts, won ? 20 : 10);
     } else if (m.round in ROUND_PTS) {
+      // Credit is earned the moment a team is slotted into this round's
+      // match -- team1_id/team2_id only ever resolves to a real team once it
+      // has won its way in (resolveSlotCode() in admin-recompute.ts, keyed
+      // off the previous round's winner_side). Gating this on the match's
+      // own `status === "finished"` (the previous behaviour) meant a team
+      // got no credit for reaching a round until it had ALSO finished
+      // playing in it -- one full round late, and the reason every favourite
+      // showed 0 pts the moment Round of 32 wrapped but before any Round of
+      // 16 fixture had been played.
       pts = Math.max(pts, ROUND_PTS[m.round]);
     }
   }
   return pts;
+}
+
+/** True once a team has lost a knockout-stage match (Round of 32 onward) --
+ *  it can no longer advance any further, regardless of how many points it
+ *  banked getting there. Falls back to comparing scores only when
+ *  winner_side is missing and the scoreline wasn't level, so a still-
+ *  unresolved draw is never mistakenly flagged as an elimination. */
+function isTeamEliminated(teamId: string, matches: Match[]): boolean {
+  return matches.some((m) => {
+    if (m.status !== "finished" || m.round === "Group Stage") return false;
+    const isTeam1 = m.team1_id === teamId;
+    const isTeam2 = m.team2_id === teamId;
+    if (!isTeam1 && !isTeam2) return false;
+    if (m.winner_side) {
+      const won = (isTeam1 && m.winner_side === "team1") || (isTeam2 && m.winner_side === "team2");
+      return !won;
+    }
+    if (m.home_score != null && m.away_score != null && m.home_score !== m.away_score) {
+      const won = isTeam1 ? m.home_score > m.away_score : m.away_score > m.home_score;
+      return !won;
+    }
+    return false;
+  });
 }
 
 // \u2500\u2500 Stage leader mini-card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -180,7 +212,7 @@ interface FavLeaderRow {
   participant_id: string;
   display_name: string;
   total: number;
-  detail: Array<{ name: string; pts: number }>;
+  detail: Array<{ name: string; pts: number; eliminated: boolean }>;
 }
 
 function FavouritesLeaderboard({
@@ -229,7 +261,9 @@ function FavouritesLeaderboard({
                       <span
                         key={d.name}
                         className={`badge ${
-                          d.pts >= 20
+                          d.eliminated
+                            ? "bg-red-100 text-red-700"
+                            : d.pts >= 20
                             ? "bg-gold/30 text-pitch"
                             : d.pts > 0
                             ? "bg-emerald-100 text-emerald-700"
@@ -316,12 +350,20 @@ export default async function LeaderboardPage() {
     }
     return teamPtsCache.get(teamId)!;
   };
+  const teamEliminatedCache = new Map<string, boolean>();
+  const getTeamEliminated = (teamId: string) => {
+    if (!teamEliminatedCache.has(teamId)) {
+      teamEliminatedCache.set(teamId, isTeamEliminated(teamId, matches));
+    }
+    return teamEliminatedCache.get(teamId)!;
+  };
 
   const favLeaderMap = new Map<string, FavLeaderRow>();
   for (const fp of allFavPicks) {
     const detail = fp.teamIds.map((id) => ({
       name: teamNames.get(id) ?? "Unknown",
       pts: getTeamPts(id),
+      eliminated: getTeamEliminated(id),
     }));
     favLeaderMap.set(fp.participant_id, {
       participant_id: fp.participant_id,
