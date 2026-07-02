@@ -103,10 +103,12 @@ export interface ProviderMatch {
 export function regulationScore(
   score: ProviderMatch["score"]
 ): { home: number | null; away: number | null } {
+  // Simple case: no extra periods were played.
   if (score.duration === "REGULAR") {
     return score.fullTime;
   }
 
+  // Best case: provider gives us the 90-minute score explicitly.
   if (
     score.regularTime &&
     score.regularTime.home !== null &&
@@ -115,20 +117,56 @@ export function regulationScore(
     return score.regularTime;
   }
 
-  console.warn(
-    "[regulationScore] provider omitted regularTime for a non-REGULAR-duration match — " +
-      "falling back to fullTime minus penalties only, which may still include extra-time goals."
-  );
-
-  if (score.duration !== "PENALTY_SHOOTOUT" || !score.penalties) {
-    return score.fullTime;
-  }
+  // score.extraTime contains the goals scored *within* extra time only (a
+  // delta from the 90-minute score, not a running total from kick-off).
+  // Subtracting it from fullTime recovers the 90+stoppage score.
+  // This is the relevant fallback when the free tier omits regularTime for a
+  // match settled in extra time (e.g. Belgium 2-2 Senegal at 90 min ->
+  // 3-2 after ET: fullTime={3,2}, extraTime={1,0} -> result {2,2}).
   const { home: ftHome, away: ftAway } = score.fullTime;
-  const { home: penHome, away: penAway } = score.penalties;
-  return {
-    home: ftHome !== null ? ftHome - (penHome ?? 0) : null,
-    away: ftAway !== null ? ftAway - (penAway ?? 0) : null,
-  };
+  const et = score.extraTime;
+  const etKnown = et != null && et.home !== null && et.away !== null;
+  const pen = score.penalties;
+  const penKnown = pen != null && pen.home !== null && pen.away !== null;
+
+  if (score.duration === "EXTRA_TIME" && etKnown) {
+    return {
+      home: ftHome !== null ? ftHome - (et.home as number) : null,
+      away: ftAway !== null ? ftAway - (et.away as number) : null,
+    };
+  }
+
+  if (score.duration === "PENALTY_SHOOTOUT") {
+    if (etKnown && penKnown) {
+      // Strip both ET goals and shootout goals to recover the 90-minute score.
+      return {
+        home: ftHome !== null ? ftHome - (et.home as number) - (pen.home as number) : null,
+        away: ftAway !== null ? ftAway - (et.away as number) - (pen.away as number) : null,
+      };
+    }
+    if (penKnown) {
+      // Can't separate ET from fullTime -- subtract only the shootout goals.
+      // The result may still include extra-time goals (acknowledged limitation).
+      console.warn(
+        "[regulationScore] PENALTY_SHOOTOUT: regularTime and extraTime both missing — " +
+          "stripping penalties only; result may include extra-time goals."
+      );
+      return {
+        home: ftHome !== null ? ftHome - (pen.home as number) : null,
+        away: ftAway !== null ? ftAway - (pen.away as number) : null,
+      };
+    }
+  }
+
+  console.warn(
+    "[regulationScore] Cannot recover 90-minute score: duration=" +
+      score.duration +
+      ", regularTime=" + JSON.stringify(score.regularTime) +
+      ", extraTime=" + JSON.stringify(score.extraTime) +
+      ", penalties=" + JSON.stringify(score.penalties) +
+      " -- falling back to fullTime which may include extra-time goals."
+  );
+  return score.fullTime;
 }
 
 export interface ProviderStandingTableRow {
