@@ -234,6 +234,23 @@ export async function getTopScorers(): Promise<ScorerRow[]> {
 }
 
 // ----------------------------------------------------------------------------
+// Award winners (declared by admin, displayed on the leaderboard page)
+// ----------------------------------------------------------------------------
+
+export async function getAwardWinners(): Promise<Array<{ category_key: string; winner_name: string }>> {
+  const supabase = createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("award_winners")
+    .select("category_key, winner_name");
+  if (error) {
+    // Table may not exist yet (migration not run). Return empty instead of throwing.
+    console.warn("[getAwardWinners] query failed:", error.message);
+    return [];
+  }
+  return (data ?? []) as Array<{ category_key: string; winner_name: string }>;
+}
+
+// ----------------------------------------------------------------------------
 // Pre-kickoff consensus
 // ----------------------------------------------------------------------------
 

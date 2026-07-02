@@ -26,6 +26,22 @@ export interface ParticipantRow {
   match_prediction_count: number;
 }
 
+export interface AwardWinner {
+  category_key: string;
+  winner_name: string;
+  declared_at: string;
+}
+
+const ALL_AWARD_CATEGORIES: Array<{ key: string; label: string; hasParticipantPicks: boolean }> = [
+  { key: "golden_boot",       label: "Golden Boot",       hasParticipantPicks: true },
+  { key: "silver_boot",       label: "Silver Boot",       hasParticipantPicks: false },
+  { key: "bronze_boot",       label: "Bronze Boot",       hasParticipantPicks: false },
+  { key: "golden_ball",       label: "Golden Ball",       hasParticipantPicks: true },
+  { key: "silver_ball",       label: "Silver Ball",       hasParticipantPicks: false },
+  { key: "bronze_ball",       label: "Bronze Ball",       hasParticipantPicks: false },
+  { key: "best_young_player", label: "Best Young Player", hasParticipantPicks: true },
+];
+
 interface EditState {
   homeScore: string;
   awayScore: string;
@@ -70,14 +86,24 @@ export default function AdminDashboard({
   matches,
   participants: initialParticipants,
   teams,
+  awardWinners: initialAwardWinners,
 }: {
   matches: Match[];
   participants: ParticipantRow[];
   teams: Team[];
+  awardWinners: AwardWinner[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
-  const [activeTab, setActiveTab] = useState<"matches" | "participants">("matches");
+  const [activeTab, setActiveTab] = useState<"matches" | "participants" | "awards">("matches");
+
+  // Award winners state
+  const [awardWinners, setAwardWinners] = useState<AwardWinner[]>(initialAwardWinners);
+  const [awardInputs, setAwardInputs] = useState<Record<string, string>>(
+    Object.fromEntries(ALL_AWARD_CATEGORIES.map((c) => [c.key, ""]))
+  );
+  const [savingAward, setSavingAward] = useState<string | null>(null);
+  const [deletingAward, setDeletingAward] = useState<string | null>(null);
 
   // Match editing state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -458,6 +484,46 @@ export default function AdminDashboard({
     startTransition(() => router.refresh());
   }
 
+  async function saveAward(categoryKey: string) {
+    const name = awardInputs[categoryKey]?.trim();
+    if (!name) return;
+    setSavingAward(categoryKey);
+    const res = await fetch("/api/admin/award-winner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categoryKey, winnerName: name }),
+    });
+    setSavingAward(null);
+    if (res.ok) {
+      setAwardWinners((prev) => {
+        const next = prev.filter((w) => w.category_key !== categoryKey);
+        next.push({ category_key: categoryKey, winner_name: name, declared_at: new Date().toISOString() });
+        return next;
+      });
+      setAwardInputs((prev) => ({ ...prev, [categoryKey]: "" }));
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
+  async function clearAward(categoryKey: string) {
+    if (!confirm("Remove the declared winner for this award?")) return;
+    setDeletingAward(categoryKey);
+    const res = await fetch("/api/admin/award-winner", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categoryKey }),
+    });
+    setDeletingAward(null);
+    if (res.ok) {
+      setAwardWinners((prev) => prev.filter((w) => w.category_key !== categoryKey));
+    } else {
+      const body = await res.json() as { error?: string };
+      alert("Error: " + (body.error ?? "unknown"));
+    }
+  }
+
   function eventLabel(e: MatchEventRow): string {
     const icon = e.event_type === "own_goal" ? "OG" : e.event_type === "penalty_goal" ? "P" : "";
     return `${e.minute}'  ${e.player_name ?? "Unknown"}${icon ? " (" + icon + ")" : ""}`;
@@ -501,7 +567,7 @@ export default function AdminDashboard({
 
       {/* Tabs */}
       <div className="flex gap-4 border-b border-neutral-200">
-        {(["matches", "participants"] as const).map((tab) => (
+        {(["matches", "participants", "awards"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -512,9 +578,11 @@ export default function AdminDashboard({
             }`}
           >
             {tab}{" "}
-            <span className="font-normal text-neutral-400">
-              ({tab === "matches" ? matches.length : participants.length})
-            </span>
+            {tab !== "awards" && (
+              <span className="font-normal text-neutral-400">
+                ({tab === "matches" ? matches.length : participants.length})
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -915,6 +983,77 @@ export default function AdminDashboard({
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Awards tab */}
+      {activeTab === "awards" && (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-neutral-500">
+            Declare the official winners for each award. These will be displayed on the leaderboard
+            alongside participants&rsquo; predictions. No automatic scoring is triggered.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {ALL_AWARD_CATEGORIES.map((cat) => {
+              const current = awardWinners.find((w) => w.category_key === cat.key);
+              return (
+                <div key={cat.key} className="card flex flex-col gap-3 p-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                      {cat.label}
+                    </p>
+                    {cat.hasParticipantPicks && (
+                      <p className="mt-0.5 text-[11px] text-neutral-400">
+                        Participants made picks for this award
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Current declared winner */}
+                  {current ? (
+                    <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2">
+                      <div>
+                        <p className="text-xs text-emerald-600">Declared winner</p>
+                        <p className="text-sm font-semibold text-emerald-800">{current.winner_name}</p>
+                      </div>
+                      <button
+                        onClick={() => clearAward(cat.key)}
+                        disabled={deletingAward === cat.key}
+                        className="text-xs text-red-400 hover:text-red-600 disabled:opacity-50"
+                      >
+                        {deletingAward === cat.key ? "..." : "Clear"}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-neutral-400 italic">Not yet declared</p>
+                  )}
+
+                  {/* Input to set / update winner */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder={current ? "Update winner..." : "Enter player name..."}
+                      value={awardInputs[cat.key] ?? ""}
+                      onChange={(e) =>
+                        setAwardInputs((prev) => ({ ...prev, [cat.key]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveAward(cat.key);
+                      }}
+                      className="min-w-0 flex-1 rounded border border-neutral-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-pitch/30"
+                    />
+                    <button
+                      onClick={() => void saveAward(cat.key)}
+                      disabled={savingAward === cat.key || !awardInputs[cat.key]?.trim()}
+                      className="rounded bg-pitch px-3 py-1.5 text-xs font-semibold text-gold disabled:opacity-50"
+                    >
+                      {savingAward === cat.key ? "..." : "Save"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

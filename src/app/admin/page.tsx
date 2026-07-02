@@ -3,7 +3,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getMatches, getTeams } from "@/lib/data";
 import { fetchAllRows } from "@/lib/predictions";
 import AdminLoginForm from "./AdminLoginForm";
-import AdminDashboard, { type ParticipantRow } from "./AdminDashboard";
+import AdminDashboard, { type ParticipantRow, type AwardWinner } from "./AdminDashboard";
 
 export const revalidate = 0;
 
@@ -39,16 +39,36 @@ async function getParticipantsWithCounts(): Promise<ParticipantRow[]> {
   );
 }
 
+async function getAwardWinners(): Promise<AwardWinner[]> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("award_winners")
+    .select("category_key, winner_name, declared_at");
+  if (error) {
+    console.error("[admin/page] getAwardWinners:", error.message);
+    return [];
+  }
+  return (data ?? []) as AwardWinner[];
+}
+
 export default async function AdminPage() {
   if (!isAdminAuthenticated()) {
     return <AdminLoginForm />;
   }
 
-  const [matches, participants, teams] = await Promise.all([
+  const [matches, participants, teams, awardWinners] = await Promise.all([
     getMatches(),
     getParticipantsWithCounts(),
     getTeams(),
+    getAwardWinners(),
   ]);
 
-  return <AdminDashboard matches={matches} participants={participants} teams={teams} />;
+  return (
+    <AdminDashboard
+      matches={matches}
+      participants={participants}
+      teams={teams}
+      awardWinners={awardWinners}
+    />
+  );
 }
